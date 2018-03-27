@@ -2,6 +2,9 @@
 This Visual Studio project is my coursework for ```CMP 202``` at Abertay University, Scotland.
 
 ## underlying concept
+Using a Value at Risk approach we try to make a statement similar to this:
+I am X percent certain there will not be a loss of more than V dollars in the next N days. (Hull, 2012)
+So X is the confidence level, where V is the loss and n is the holding period.
 ```
 dS = μ S dt + σ S ds
 
