@@ -1,5 +1,4 @@
 
-
 #include <chrono>
 #include <iostream>
 #include <iomanip>
@@ -22,7 +21,7 @@ typedef std::chrono::steady_clock the_serial_clock;
 typedef std::chrono::steady_clock the_amp_clock;
 
 // Define variables needed for value at risk calculation
-const int NUMBER_OF_PATHS = 1'000'000;
+const int NUMBER_OF_PATHS = 1'048'576;
 const float INITIAL_VALUE = 10.0f;
 const float VOLATILITY = 0.04f;
 const float EXPECTED_RETURN = 0.05f;
@@ -105,29 +104,29 @@ void calculate_value_at_risk(array<float>& endValues, unsigned const int rank) r
 details on geometric brownian motion see: https://goo.gl/lrCeLJ.
 */
 void generate_random_paths(const unsigned int seed, const int size, const float initialValue, const float expectedReturn, const float volatility, const float tradingDays, std::vector<float>& endValues) {
-	
-	const unsigned int rank = 1;
+	const int TS = 1024;
+	const unsigned int RANK = 1;
 	// todo: find out what extent is best for tinymyt_collection, large numbers lead to crash of program
-	extent<rank> tinyE(4096);
-	tinymt_collection<rank> randCollection(tinyE, seed);
+	extent<RANK> tinyE(4096);
+	tinymt_collection<RANK> randCollection(tinyE, seed);
 
-	extent<rank> e(size);
+	extent<RANK> e(size);
 	array_view<float> endvaluesAv(e, endValues);
-	
+
 	// do not copy data to accelerator
 	endvaluesAv.discard_data();
 
 	// start clock for GPU version after array allocation
 	the_amp_clock::time_point start = the_amp_clock::now();
-	
+
 	// wrap parallel_for_each in try catch to provide feedback on runtime exceptions
 	try {
-		parallel_for_each(endvaluesAv.extent, [=](index<1>idx) restrict(amp) {
-
+		parallel_for_each(endvaluesAv.extent.tile<TS>(), [=](tiled_index<TS>t_idx) restrict(amp) {
+			index<1> idx = t_idx.global;
 			auto t = randCollection[idx];
 			float s(0.0f);
 			float prevS(initialValue);
-			
+
 			// see https://goo.gl/Rb394n for rationelle behind modifying drift and volatility.
 			// scale drift to timestep
 			const float dailyDrift = expectedReturn / tradingDays;
@@ -174,9 +173,9 @@ For details see: https://goo.gl/DPZuGU
 */
 void warm_up() {
 	//fill vector
-	std::vector<float> v1(1, 0.0f);
+	std::vector<float> v1(1024, 0.0f);
 	// run kernel with minimal dataset
-	generate_random_paths(0, 1, 0, 0, 0, 0, v1);
+	generate_random_paths(0, 1024, 0, 0, 0, 0, v1);
 } // warm_up
 
 int main(int argc, char *argv[])
