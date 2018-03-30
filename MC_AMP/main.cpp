@@ -93,11 +93,11 @@ void box_muller_transform(float& u1, float& u2) restrict(amp)
 /* This function calculates the value at risk from a given set of endValues by sorting a given list
 and extracting a value at rank x. Functionality is identifical to nth_rank in stl. amp_stl_algorithms
 contains a function called nth_element, but it is not implemented as of today. My own implementation
-uses a map reduce algorithm.
+uses radix select implementation with a complexity of O(n), which is an adoption of radix sort from
+the amp algorithms library. See https://archive.codeplex.com/?p=ampalgorithms for details.
 */
 void calculate_value_at_risk(array<float>& endValues, unsigned const int rank) restrict(amp) {
-	// todo: implementation using map reduce
-	//amp_stl_algorithms::nth_element(unsortedVector.begin(),unsortedVector.begin()+rank,unsortedVector.end());
+	// todo: implementation using radix select.
 } // calculate_value_at_risk
 
 /* This function calculates random paths using geometric brownian motion (GBM) for a given holding period. For
