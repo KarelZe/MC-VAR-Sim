@@ -106,14 +106,14 @@ details on geometric brownian motion see: https://goo.gl/lrCeLJ.
 void generate_random_paths(const unsigned int seed, const int size, const float initialValue, const float expectedReturn, const float volatility, const float tradingDays, std::vector<float>& endValues) {
 	const int TS = 1024;
 	const unsigned int RANK = 1;
-	
+
 	// validate that given input is optimal
 	static_assert((HOLDING_PERIOD % 2 == 0), "The holding period must be a multiple of two.");
 	static_assert((TS % 2 == 0 && TS >= 2), "Tilesize must be a multiple of two.");
-	
+
 	// todo: find out what extent is best for tinymyt_collection, large numbers lead to crash of program
-	extent<RANK> tinyE(4096);
-	tinymt_collection<RANK> randCollection(tinyE, seed);
+	const extent<RANK> tinyE(4096);
+	const tinymt_collection<RANK> randCollection(tinyE, seed);
 
 	extent<RANK> e(size);
 	array_view<float> endvaluesAv(e, endValues);
@@ -127,8 +127,11 @@ void generate_random_paths(const unsigned int seed, const int size, const float 
 	// wrap parallel_for_each in try catch to provide feedback on runtime exceptions
 	try {
 		parallel_for_each(endvaluesAv.extent.tile<TS>(), [=](tiled_index<TS>t_idx) restrict(amp) {
-			index<1> idx = t_idx.global;
-			auto t = randCollection[idx];
+			int tid = t_idx.local[0];
+			// create local array for saving results. No need to populate array
+			tile_static float tile_data[1024];
+
+			auto t = randCollection[t_idx.global];
 			float s(0.0f);
 			float prevS(initialValue);
 
@@ -136,10 +139,10 @@ void generate_random_paths(const unsigned int seed, const int size, const float 
 			// scale drift to timestep
 			const float dailyDrift = expectedReturn / tradingDays;
 			// scale volatility to timestep. Volatility scales with square root of time.
-			const float dailyVolatility = volatility / fast_math::sqrt(tradingDays);
+			// Use rsqrt for performance reasons (See Chapter 7 AMP-Book)
+			const float dailyVolatility = volatility * fast_math::rsqrtf(tradingDays);
 			// extract volatility from daily drift
 			const float meanDrift = dailyDrift - 0.5f * dailyVolatility * dailyVolatility;
-
 			// generate path for entire holding period, write endprices back to vector
 			for (auto day(1); day <= HOLDING_PERIOD / 2; day++) {
 				// generate two random numbers and convert to normally distributed numbers
@@ -157,7 +160,9 @@ void generate_random_paths(const unsigned int seed, const int size, const float 
 				prevS = s;
 
 			}
-			endvaluesAv[idx] = s;
+			tile_data[tid] = s;
+			// todo: Copy only once if possible, otherwise remove tile_static approach
+			endvaluesAv[t_idx.global[0]] = tile_data[tid];
 		});
 		endvaluesAv.synchronize();
 		// Stop timing
