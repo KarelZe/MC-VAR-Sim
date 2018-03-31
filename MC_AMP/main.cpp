@@ -100,6 +100,16 @@ void calculate_value_at_risk(array<float>& endValues, unsigned const int rank) r
 	// todo: implementation using radix select.
 } // calculate_value_at_risk
 
+/* This is the cpu implementation of calculate_value_at_risk */
+void calculate_value_at_risk_cpu(std::vector<float>& pathVector, const float confidenceLevel) {
+	const unsigned int RANK = static_cast<unsigned int>(NUMBER_OF_PATHS * (1 - confidenceLevel));
+	// uses median of medians algorithm with complexity O(n) to rearrange results
+	std::nth_element(pathVector.begin(), pathVector.begin() + RANK, pathVector.end());
+	// print value at risk
+	std::cout << "Value at risk at " << HOLDING_PERIOD << " days with " << confidenceLevel * 100 <<
+		" % confidence: " << (pathVector.at(RANK) - INITIAL_VALUE) << " GPB (with - being risk and + being chance)" << std::endl;
+}
+
 /* This function calculates random paths using geometric brownian motion (GBM) for a given holding period. For
 details on geometric brownian motion see: https://goo.gl/lrCeLJ.
 */
@@ -111,8 +121,10 @@ void generate_random_paths(const unsigned int seed, const int size, const float 
 	static_assert((HOLDING_PERIOD % 2 == 0), "The holding period must be a multiple of two.");
 	static_assert((TS % 2 == 0 && TS >= 2), "Tilesize must be a multiple of two.");
 
-	// todo: find out what extent is best for tinymyt_collection, large numbers lead to crash of program
-	const extent<RANK> tinyE(4096);
+	/* todo: find out what extent is best for tinymyt_collection, large numbers lead to crash of program probably due
+	/ to memory limitations. If solved change auto t to use global idx. Small tiny collection delivers falsy results
+	meaning that a higher number of paths won't deliver a higher accurancy.*/
+	const extent<RANK> tinyE(TS);
 	const tinymt_collection<RANK> randCollection(tinyE, seed);
 
 	extent<RANK> e(size);
@@ -130,8 +142,8 @@ void generate_random_paths(const unsigned int seed, const int size, const float 
 			int tid = t_idx.local[0];
 			// create local array for saving results. No need to populate array
 			tile_static float tile_data[1024];
+			auto t = randCollection[t_idx.local];
 
-			auto t = randCollection[t_idx.global];
 			float s(0.0f);
 			float prevS(initialValue);
 
@@ -164,6 +176,7 @@ void generate_random_paths(const unsigned int seed, const int size, const float 
 			// todo: Copy only once if possible, otherwise remove tile_static approach
 			endvaluesAv[t_idx.global[0]] = tile_data[tid];
 		});
+
 		endvaluesAv.synchronize();
 		// Stop timing
 		the_amp_clock::time_point end = the_amp_clock::now();
@@ -202,8 +215,10 @@ int main(int argc, char *argv[])
 	generate_random_paths(seed, NUMBER_OF_PATHS, INITIAL_VALUE, EXPECTED_RETURN, VOLATILITY, TRADING_DAYS, pathVector);
 
 	// print the first view results for validation
-	for (auto i(0); i < 100; i++) {
+	for (auto i(0); i < 10; i++) {
 		std::cout << std::fixed << std::setprecision(5) << pathVector[i] << std::endl;
 	}
+	calculate_value_at_risk_cpu(pathVector, CONFIDENCE_LEVEL);
 	return 0;
 } // main
+
