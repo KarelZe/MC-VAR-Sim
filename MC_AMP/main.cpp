@@ -1,4 +1,4 @@
-
+#include <assert.h>
 #include <chrono>
 #include <iostream>
 #include <iomanip>
@@ -54,7 +54,7 @@ void list_accelerators()
 		report_accelerator(a);
 	}
 
-	accelerator acc = accelerator(accelerator::default_accelerator);
+	const accelerator acc = accelerator(accelerator::default_accelerator);
 	std::wcout << " default acc = " << acc.description << std::endl;
 	// todo: replace with assert?
 	if (acc == accelerator(accelerator::direct3d_ref))
@@ -106,6 +106,11 @@ details on geometric brownian motion see: https://goo.gl/lrCeLJ.
 void generate_random_paths(const unsigned int seed, const int size, const float initialValue, const float expectedReturn, const float volatility, const float tradingDays, std::vector<float>& endValues) {
 	const int TS = 1024;
 	const unsigned int RANK = 1;
+	
+	// validate that given input is optimal
+	static_assert((HOLDING_PERIOD % 2 == 0), "The holding period must be a multiple of two.");
+	static_assert((TS % 2 == 0 && TS >= 2), "Tilesize must be a multiple of two.");
+	
 	// todo: find out what extent is best for tinymyt_collection, large numbers lead to crash of program
 	extent<RANK> tinyE(4096);
 	tinymt_collection<RANK> randCollection(tinyE, seed);
@@ -134,7 +139,7 @@ void generate_random_paths(const unsigned int seed, const int size, const float 
 			const float dailyVolatility = volatility / fast_math::sqrt(tradingDays);
 			// extract volatility from daily drift
 			const float meanDrift = dailyDrift - 0.5f * dailyVolatility * dailyVolatility;
-			// todo: add assert for uneven holding periods or holding periods < 2 days
+
 			// generate path for entire holding period, write endprices back to vector
 			for (auto day(1); day <= HOLDING_PERIOD / 2; day++) {
 				// generate two random numbers and convert to normally distributed numbers
