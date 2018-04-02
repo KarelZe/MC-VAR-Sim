@@ -159,10 +159,16 @@ void generate_random_paths(const unsigned int seed, const int size, const float 
 
 
   /* This function calculates the value at risk from a given set of endValues by sorting a given list
-  and extracting a value at rank x. Functionality is identifical to nth_rank in stl. amp_stl_algorithms
+  and extracting a value at rank x. Functionality is identical to nth_rank in stl. amp_stl_algorithms
   contains a function called nth_element, but it is not implemented as of today. My own implementation
-  uses radix select implementation with a complexity of O(n), which is an adoption of radix sort from
-  the amp algorithms library. See https://archive.codeplex.com/?p=ampalgorithms for details.
+  currently uses radix radix sort from the amp algorithms library. See
+  https://archive.codeplex.com/?p=ampalgorithms for details.
+
+  todo: Plan to replace it with parallel radix select for better performance. See:
+	@article{Alabi:2012:FLA:2133803.2345676,
+	author = {Alabi, Tolu and Blanchard, Jeffrey D. and Gordon, Bradley and Steinbach, Russel},
+	title = {Fast K-selection Algorithms for Graphics Processing Units},
+	doi = {10.1145/2133803.2345676}
   */
 void calculate_value_at_risk(std::vector<float>& pathVector, const float initialValue, const float expectedReturn, const float volatility, const int tradingDays, const int holdingPeriod, const float confidenceLevel, const int seed = 7859) {
 
@@ -177,14 +183,12 @@ void calculate_value_at_risk(std::vector<float>& pathVector, const float initial
 	// second kernel: rearrange elements to obtain element at rank
 	const unsigned int RANK = static_cast<unsigned int>(pathVector.size() * (1 - confidenceLevel));
 
-	// todo: investigate why amp_algorithms is delivering falsy results
-	// amp_algorithms::radix_sort(endvaluesAv);
+	// todo: investigate why amp_algorithms is delivering falsy results on large datasets, see: https://stackoverflow.com/questions/49615045/c-amp-radix-sort-on-large-dataset
+	amp_algorithms::radix_sort(endvaluesAv);
 
 	// copy data back to host
 	endvaluesAv.synchronize();
-	std::sort(pathVector.begin(), pathVector.end());
-
-
+		
 	// print value at risk
 	std::cout << "Value at risk at " << holdingPeriod << " days with " << confidenceLevel * 100 <<
 		" % confidence: " << (pathVector.at(RANK) - initialValue) << " GPB (with - being risk and + being chance)" << std::endl;
@@ -208,7 +212,7 @@ int main(int argc, char *argv[])
 	query_AMP_support();
 	// run kernel once on small dataset to supress effects of lazy init and jit.
 	warm_up();
-	for (auto i(1'048); i <= 1'048'576; i *= 2) {
+	for (auto i(1'024); i <= 4'096; i *= 2) {
 		// create vector holding all paths
 		std::vector<float> pathVector(i);
 		calculate_value_at_risk(pathVector, 10.0f, 0.05f, 0.04f, 300, 300, 0.99f, 7859);
