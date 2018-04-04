@@ -25,6 +25,8 @@ using std::chrono::milliseconds;
 typedef std::chrono::steady_clock the_serial_clock;
 typedef std::chrono::steady_clock the_amp_clock;
 
+#define TS 32
+
 // Define variables needed for value at risk calculation
 
 void report_accelerator(const accelerator a)
@@ -47,7 +49,7 @@ void list_accelerators()
 	std::vector<accelerator> accls = accelerator::get_all();
 
 	// iterates over all accelerators and print characteristics
-	for (unsigned int i(0); i < accls.size(); i++)
+	for (unsigned i(0); i < accls.size(); i++)
 	{
 		accelerator a = accls[i];
 		report_accelerator(a);
@@ -93,7 +95,7 @@ void box_muller_transform(float& u1, float& u2) restrict(amp)
   /* This function calculates random paths using geometric brownian motion (GBM) for a given holding period. For
   details on geometric brownian motion see: https://goo.gl/lrCeLJ.
   */
-void generate_random_paths(const unsigned int seed, const int size, const float initialValue, const float expectedReturn, const float volatility, const int tradingDays, const int holdingPeriod, concurrency::array_view<float>& endvaluesAv) {
+void generate_random_paths(const unsigned seed, const int size, const float initialValue, const float expectedReturn, const float volatility, const int tradingDays, const int holdingPeriod, concurrency::array_view<float>& endvaluesAv) {
 
 	// validate that given input is optimal
 	assert(holdingPeriod % 2 == 0);
@@ -110,7 +112,6 @@ void generate_random_paths(const unsigned int seed, const int size, const float 
 	// wrap parallel_for_each in try catch to provide feedback on runtime exceptions
 	try {
 		parallel_for_each(endvaluesAv.extent, [=](index<1>idx) restrict(amp) {
-
 
 			float s(0.0f);
 			float prevS(initialValue);
@@ -153,45 +154,103 @@ void generate_random_paths(const unsigned int seed, const int size, const float 
 	{
 		MessageBoxA(NULL, ex.what(), "Error", MB_ICONERROR);
 	}
-
 } // generate_random_paths
 
+/* This function returns the smallest element of an array_view calculated using an
+map reduce approach. The major part is calculated on the gpu. While the summing
+of the tiles is done on the gpu. In case of an error 0 is returned.
+*/
+float min_element(concurrency::array_view<float, 1>& avSrc, int elementCount) {
 
+	// todo: support array view with other tile_size as well
 
-  /* This function calculates the value at risk from a given set of endValues by sorting a given list
-  and extracting a value at rank x. Functionality is identical to nth_rank in stl. amp_stl_algorithms
-  contains a function called nth_element, but it is not implemented as of today. My own implementation
-  currently uses radix radix sort from the amp algorithms library. See
-  https://archive.codeplex.com/?p=ampalgorithms for details.
+	// tile_size and tile_count are not matching element_count
+	assert(elementCount % TS == 0);
+	// element_count is not valid.
+	assert(elementCount < 0 && elementCount <= INT_MAX);
 
-  todo: Plan to replace it with parallel radix select for better performance. See:
-	@article{Alabi:2012:FLA:2133803.2345676,
-	author = {Alabi, Tolu and Blanchard, Jeffrey D. and Gordon, Bradley and Steinbach, Russel},
-	title = {Fast K-selection Algorithms for Graphics Processing Units},
-	doi = {10.1145/2133803.2345676}
-  */
-void calculate_value_at_risk(std::vector<float>& pathVector, const float initialValue, const float expectedReturn, const float volatility, const int tradingDays, const int holdingPeriod, const float confidenceLevel, const int seed = 7859) {
+	// Using arrays as temporary memory. Array holds at least one lement
+	array<float> arr((elementCount / TS) ? (elementCount / TS) : 1);
+	array_view<float> av_dst(arr);
+	// do not copy data to gpu
+	av_dst.discard_data();
+
+	// start clock for GPU version after array allocation
+	the_amp_clock::time_point start = the_amp_clock::now();
+	try
+	{
+		// Reduce using parallel_for_each as long as the sequence length
+		// is evenly divisable to the number of threads in the tile.
+		while ((elementCount % TS) == 0)
+		{
+			parallel_for_each(extent<1>(elementCount).tile<TS>(), [=](tiled_index<TS> tidx) restrict(amp)
+			{
+				// Use tile_static as a scratchpad memory.
+				tile_static float tile_data[TS];
+
+				unsigned local_idx = tidx.local[0];
+				tile_data[local_idx] = avSrc[tidx.global];
+				tidx.barrier.wait();
+
+				for (unsigned s = TS / 2; s > 0; s /= 2) {
+					if (local_idx < s) {
+						//tile_data[local_idx] += tile_data[local_idx + s];
+						tile_data[local_idx] = fast_math::fmin(tile_data[local_idx], tile_data[local_idx + s]);
+					}
+					tidx.barrier.wait();
+				}
+				// Store the tile result in the global memory.
+				if (local_idx == 0)
+				{
+					av_dst[tidx.tile] = tile_data[0];
+				}
+			});
+			// Update the sequence length, swap source with destination.
+			elementCount /= TS;
+			std::swap(avSrc, av_dst);
+		}
+		av_dst.discard_data();
+		// Perform any remaining reduction on the CPU.
+		std::vector<float> result(elementCount);
+
+		// copy only part of array_view back to host, which contains the minimal elements (for performance reasons)
+		copy(avSrc.section(0, elementCount), result.begin());
+
+		// Stop timing
+		the_amp_clock::time_point end = the_amp_clock::now();
+
+		// Compute the difference between the two times in milliseconds
+		auto time_taken = duration_cast<milliseconds>(end - start).count();
+		std::cout << "Obtaining the smallest result took: " << time_taken << " ms." << std::endl;
+		// reduce all remaining tiles on the cpu
+		auto idx = std::min_element(result.begin(), result.end());
+		return result.at(idx - result.begin());
+	}
+	catch (const Concurrency::runtime_exception& ex)
+	{
+		MessageBoxA(NULL, ex.what(), "Error", MB_ICONERROR);
+	}
+	return 0;
+} // min_element
+
+  /* This function calculates the value at risk at a confidence level of 100 % by calling the generate_random_paths function and by extracting
+  the endvalue at rank 0. The functionality is similar to stl::min_element()*/
+void calculate_value_at_risk(const int numberOfPaths, const float initialValue, const float expectedReturn, const float volatility, const int tradingDays, const int holdingPeriod, const int seed = 7859) {
 
 	// initialize array view, do not copy data to accelerator
-	extent<1> e(pathVector.size());
-	array_view<float> endvaluesAv(e, pathVector);
+	extent<1> e(numberOfPaths);
+	array_view<float> endvaluesAv(e);
 	endvaluesAv.discard_data();
 
 	// first kernel: generate random paths
-	generate_random_paths(seed, pathVector.size(), initialValue, expectedReturn, volatility, tradingDays, holdingPeriod, endvaluesAv);
+	generate_random_paths(seed, numberOfPaths, initialValue, expectedReturn, volatility, tradingDays, holdingPeriod, endvaluesAv);
 
 	// second kernel: rearrange elements to obtain element at rank
-	const unsigned int RANK = static_cast<unsigned int>(pathVector.size() * (1 - confidenceLevel));
+	float minResult = min_element(endvaluesAv, numberOfPaths);
 
-	// todo: investigate why amp_algorithms is delivering falsy results on large datasets, see: https://stackoverflow.com/questions/49615045/c-amp-radix-sort-on-large-dataset
-	amp_algorithms::radix_sort(endvaluesAv);
-
-	// copy data back to host
-	endvaluesAv.synchronize();
-		
 	// print value at risk
-	std::cout << "Value at risk at " << holdingPeriod << " days with " << confidenceLevel * 100 <<
-		" % confidence: " << (pathVector.at(RANK) - initialValue) << " GPB (with - being risk and + being chance)" << std::endl;
+	std::cout << "Value at risk at " << holdingPeriod << " days with " << "100 % confidence: "
+		<< minResult - initialValue << " GPB (with - being risk and + being chance)" << std::endl;
 } // calculate_value_at_risk
 
 
@@ -200,10 +259,8 @@ void calculate_value_at_risk(std::vector<float>& pathVector, const float initial
   For details see: https://goo.gl/DPZuGU
   */
 void warm_up() {
-	//fill vector
-	std::vector<float> v1(1024, 0);
 	// run kernel with minimal dataset
-	calculate_value_at_risk(v1, 10.0f, 0.05f, 0.04f, 300, 300, 0.99f, 7859);
+	calculate_value_at_risk(1024, 10.0f, 0.05f, 0.04f, 300, 300, 7859);
 } // warm_up
 
 int main(int argc, char *argv[])
@@ -214,8 +271,7 @@ int main(int argc, char *argv[])
 	warm_up();
 	for (auto i(1'024); i <= 4'096; i *= 2) {
 		// create vector holding all paths
-		std::vector<float> pathVector(i);
-		calculate_value_at_risk(pathVector, 10.0f, 0.05f, 0.04f, 300, 300, 0.99f, 7859);
+		calculate_value_at_risk(i, 10.0f, 0.05f, 0.04f, 300, 300, 7859);
 	}
 	return 0;
 } // main
