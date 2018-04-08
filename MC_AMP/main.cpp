@@ -12,7 +12,7 @@
 #include <amp_tinymt_rng.h>
 #include <amp_math.h>
 #include <amp_algorithms.h>
-
+#include <fstream>
 
 // Need to access the concurrency libraries 
 using namespace concurrency;
@@ -25,8 +25,7 @@ using std::chrono::milliseconds;
 typedef std::chrono::steady_clock the_serial_clock;
 typedef std::chrono::steady_clock the_amp_clock;
 
-#define TS 32
-
+std::ofstream file;
 // Define variables needed for value at risk calculation
 
 void report_accelerator(const accelerator a)
@@ -91,11 +90,10 @@ void box_muller_transform(float& u1, float& u2) restrict(amp)
 	u2 = r * fast_math::sin(phi);
 } // box_muller_transform
 
-
   /* This function calculates random paths using geometric brownian motion (GBM) for a given holding period. For
   details on geometric brownian motion see: https://goo.gl/lrCeLJ.
   */
-void generate_random_paths(const unsigned seed, const int size, const float initialValue, const float expectedReturn, const float volatility, const int tradingDays, const int holdingPeriod, concurrency::array_view<float>& endvaluesAv) {
+void generate_random_paths(const unsigned seed, const int size, const float initialValue, const float expectedReturn, const float volatility, const int tradingDays, const int holdingPeriod, concurrency::array<float>& endvalues) {
 
 	// validate that given input is optimal
 	assert(holdingPeriod % 2 == 0);
@@ -107,11 +105,11 @@ void generate_random_paths(const unsigned seed, const int size, const float init
 	const tinymt_collection<1> randCollection(tinyE, seed);
 
 	// start clock for GPU version after array allocation
-	the_amp_clock::time_point start = the_amp_clock::now();
+	//the_amp_clock::time_point start = the_amp_clock::now();
 
 	// wrap parallel_for_each in try catch to provide feedback on runtime exceptions
 	try {
-		parallel_for_each(endvaluesAv.extent, [=](index<1>idx) restrict(amp) {
+		parallel_for_each(endvalues.extent, [=, &endvalues](index<1>idx) restrict(amp) {
 
 			float s(0.0f);
 			float prevS(initialValue);
@@ -142,13 +140,8 @@ void generate_random_paths(const unsigned seed, const int size, const float init
 				s = fast_math::fmax(prevS * fast_math::expf(ds), 0.0f);
 				prevS = s;
 			}
-			endvaluesAv[idx] = s;
+			endvalues[idx] = s;
 		});
-		// Stop timing
-		the_amp_clock::time_point end = the_amp_clock::now();
-		// Compute the difference between the two times in milliseconds
-		auto time_taken = duration_cast<milliseconds>(end - start).count();
-		std::cout << "Calculating random paths took: " << time_taken << " ms." << std::endl;
 	}
 	catch (const Concurrency::runtime_exception& ex)
 	{
@@ -156,45 +149,58 @@ void generate_random_paths(const unsigned seed, const int size, const float init
 	}
 } // generate_random_paths
 
+/* Function tries reading from array_view. If index is part of array_view it's value is returned,
+otherwise the greatest float*/
+float padded_read(const array_view<float, 1>& src, const index<1>& idx) restrict(cpu, amp)
+{
+	return src.extent.contains(idx) ? src[idx] : FLT_MAX;
+} // padded_read
+/* Function tries to write to array_view, if index is part of source array_view.
+*/
+void padded_write(const array_view<float>& src, const index<1>& idx, const float& val) restrict(cpu, amp)
+{
+	if (src.extent.contains(idx))
+		src[idx] = val;
+} // padded_write
+
 /* This function returns the smallest element of an array_view calculated using an
 map reduce approach. The major part is calculated on the gpu. While the summing
 of the tiles is done on the gpu. In case of an error 0 is returned.
+Tile size needs to be known at compile time. That's why I am using template arguments
+here.
 */
-float min_element(concurrency::array_view<float, 1>& avSrc, int elementCount) {
+template<const int tile_size>
+float min_element(concurrency::array<float, 1>& src, int elementCount) {
 
-	// todo: support array view with other tile_size as well
-
-	// tile_size and tile_count are not matching element_count
-	assert(elementCount % TS == 0);
+	// check for max tile size
+	assert(tile_size >= 2 && tile_size <= 1'024)
+		// tile_size and tile_count are not matching element_count
+		assert(elementCount % TS == 0);
 	// element_count is not valid.
 	assert(elementCount < 0 && elementCount <= INT_MAX);
+	// check if number of tiles is <= 65k, which is the max in AMP
+	assert(elementCount / TS < 65'536);
 
 	// Using arrays as temporary memory. Array holds at least one lement
-	array<float> arr((elementCount / TS) ? (elementCount / TS) : 1);
-	array_view<float> av_dst(arr);
-	// do not copy data to gpu
-	av_dst.discard_data();
+	array<float> dst((elementCount / tile_size) ? (elementCount / tile_size) : 1);
 
-	// start clock for GPU version after array allocation
-	the_amp_clock::time_point start = the_amp_clock::now();
 	try
 	{
 		// Reduce using parallel_for_each as long as the sequence length
 		// is evenly divisable to the number of threads in the tile.
-		while ((elementCount % TS) == 0)
+		while ((elementCount % tile_size) == 0)
 		{
-			parallel_for_each(extent<1>(elementCount).tile<TS>(), [=](tiled_index<TS> tidx) restrict(amp)
+			parallel_for_each(extent<1>(elementCount).tile<tile_size>(), [=, &src, &dst](tiled_index<tile_size> tidx) restrict(amp)
 			{
 				// Use tile_static as a scratchpad memory.
-				tile_static float tile_data[TS];
+				tile_static float tile_data[tile_size];
 
 				unsigned local_idx = tidx.local[0];
-				tile_data[local_idx] = avSrc[tidx.global];
+				tile_data[local_idx] = src[tidx.global];
 				tidx.barrier.wait();
 
-				for (unsigned s = TS / 2; s > 0; s /= 2) {
+				for (unsigned s = tile_size / 2; s > 0; s /= 2) {
 					if (local_idx < s) {
-						//tile_data[local_idx] += tile_data[local_idx + s];
 						tile_data[local_idx] = fast_math::fmin(tile_data[local_idx], tile_data[local_idx + s]);
 					}
 					tidx.barrier.wait();
@@ -202,26 +208,19 @@ float min_element(concurrency::array_view<float, 1>& avSrc, int elementCount) {
 				// Store the tile result in the global memory.
 				if (local_idx == 0)
 				{
-					av_dst[tidx.tile] = tile_data[0];
+					dst[tidx.tile] = tile_data[0];
 				}
 			});
 			// Update the sequence length, swap source with destination.
-			elementCount /= TS;
-			std::swap(avSrc, av_dst);
+			elementCount /= tile_size;
+			std::swap(src, dst);
 		}
-		av_dst.discard_data();
 		// Perform any remaining reduction on the CPU.
 		std::vector<float> result(elementCount);
 
 		// copy only part of array_view back to host, which contains the minimal elements (for performance reasons)
-		copy(avSrc.section(0, elementCount), result.begin());
+		copy(src.section(0, elementCount), result.begin());
 
-		// Stop timing
-		the_amp_clock::time_point end = the_amp_clock::now();
-
-		// Compute the difference between the two times in milliseconds
-		auto time_taken = duration_cast<milliseconds>(end - start).count();
-		std::cout << "Obtaining the smallest result took: " << time_taken << " ms." << std::endl;
 		// reduce all remaining tiles on the cpu
 		auto idx = std::min_element(result.begin(), result.end());
 		return result.at(idx - result.begin());
@@ -235,33 +234,102 @@ float min_element(concurrency::array_view<float, 1>& avSrc, int elementCount) {
 
   /* This function calculates the value at risk at a confidence level of 100 % by calling the generate_random_paths function and by extracting
   the endvalue at rank 0. The functionality is similar to stl::min_element()*/
-void calculate_value_at_risk(const int numberOfPaths, const float initialValue, const float expectedReturn, const float volatility, const int tradingDays, const int holdingPeriod, const int seed = 7859) {
+template<const int tile_size>
+void calculate_value_at_risk(std::vector<float>hostEndValues, const float initialValue, const float expectedReturn, const float volatility, const int tradingDays, const int holdingPeriod, const int seed = 7859) {
 
-	// initialize array view, do not copy data to accelerator
-	extent<1> e(numberOfPaths);
-	array_view<float> endvaluesAv(e);
-	endvaluesAv.discard_data();
+	// time taken to initialize, no copying of data, entire implementation uses array instead of array_view to be able to measure copying times as well (cmp. p. 131 AMP book) 
+	the_amp_clock::time_point startInitialize = the_amp_clock::now();
+	array<float> gpuEndValues(hostEndValues.size());
+	gpuEndValues.accelerator_view.wait();
+	the_amp_clock::time_point endInitialize = the_amp_clock::now();
+	auto elapsedTimeInitialize = duration_cast<milliseconds>(endInitialize - startInitialize).count();
+	std::cout << std::setw(35) << std::left << "Initialize time: " << elapsedTimeInitialize << std::endl;
 
 	// first kernel: generate random paths
-	generate_random_paths(seed, numberOfPaths, initialValue, expectedReturn, volatility, tradingDays, holdingPeriod, endvaluesAv);
+	generate_random_paths(seed, hostEndValues.size(), initialValue, expectedReturn, volatility, tradingDays, holdingPeriod, gpuEndValues);
+	gpuEndValues.accelerator_view.wait();
+	the_amp_clock::time_point endKernelOne = the_amp_clock::now();
+	auto elapsedTimeKernelOne = duration_cast<milliseconds>(endKernelOne - endInitialize).count();
+	std::cout << std::setw(35) << std::left << "Kernel one time: " << elapsedTimeKernelOne << std::endl;
 
-	// second kernel: rearrange elements to obtain element at rank
-	float minResult = min_element(endvaluesAv, numberOfPaths);
+	// write endvalues back to host for further investigation
+	copy(gpuEndValues, hostEndValues.begin());
+	gpuEndValues.accelerator_view.wait();
+	the_amp_clock::time_point endCopy = the_amp_clock::now();
+	auto elapsedTimeCopying = duration_cast<milliseconds>(endCopy - endKernelOne).count();
+	std::cout << std::setw(35) << std::left << "copying time: " << elapsedTimeCopying << std::endl;
+
+	// second kernel: rearrange elements to obtain element at rank 0
+	float minResult = min_element<tile_size>(gpuEndValues, hostEndValues.size());
+	gpuEndValues.accelerator_view.wait();
+	the_amp_clock::time_point endKernelTwo = the_amp_clock::now();
+	auto elapsedTimeKernelTwo = duration_cast<milliseconds>(endKernelTwo - endCopy).count();
+	std::cout << std::setw(35) << std::left << "Kernel two time: " << elapsedTimeKernelTwo << std::endl;
+
+	// total elapsed time. It can slightly differ from the individual times due to casting
+	auto elapsedTimeTotal = duration_cast<milliseconds>(endKernelTwo - startInitialize).count();
+
+	// file << elapsedTimeTotal << ",";
+	// file << elapsedTimeInitialize << "," << elapsedTimeKernelOne << "," << elapsedTimeCopying << "," << elapsedTimeKernelTwo;
+
+	// write time to file
+	std::cout << std::setw(35) << std::left << "Total time: " << elapsedTimeTotal << std::endl << std::endl;
 
 	// print value at risk
-	std::cout << "Value at risk at " << holdingPeriod << " days with " << "100 % confidence: "
-		<< minResult - initialValue << " GPB (with - being risk and + being chance)" << std::endl;
+	//std::cout << "Value at risk at " << holdingPeriod << " days with " << "100 % confidence: "
+	//	<< minResult - initialValue << " GPB (with - being risk and + being chance)" << std::endl;
 } // calculate_value_at_risk
 
-
-  /*
-  Helper function to avoid lazy initialization and just in time overhead (JIT) on first execution.
-  For details see: https://goo.gl/DPZuGU
-  */
+/*
+Helper function to avoid lazy initialization and just in time overhead (JIT) on first execution.
+For details see: https://goo.gl/DPZuGU */
 void warm_up() {
+	std::vector<float>paths(1024, 0);
 	// run kernel with minimal dataset
-	calculate_value_at_risk(1024, 10.0f, 0.05f, 0.04f, 300, 300, 7859);
+	calculate_value_at_risk<4>(paths, 10.0f, 0.05f, 0.04f, 300, 300, 7859);
+	std::cout << "------------------------------------- valid results starting from here -------------------------------------" << std::endl;
 } // warm_up
+
+/* This is wrapper function around calculate_value_at_risk. It lets the tile_size dynamically
+by using template parameters. The tilesize must be known at compile time. An approach similar
+to this is suggested in the AMP book.
+*/
+void run(const unsigned &tile_size, std::vector<float> &paths) {
+	switch (tile_size) {
+	case 2:
+		calculate_value_at_risk<2>(paths, 10.0f, 0.05f, 0.04f, 300, 300, 7859);
+		break;
+	case 4:
+		calculate_value_at_risk<4>(paths, 10.0f, 0.05f, 0.04f, 300, 300, 7859);
+		break;
+	case 8:
+		calculate_value_at_risk<8>(paths, 10.0f, 0.05f, 0.04f, 300, 300, 7859);
+		break;
+	case 16:
+		calculate_value_at_risk<16>(paths, 10.0f, 0.05f, 0.04f, 300, 300, 7859);
+		break;
+	case 32:
+		calculate_value_at_risk<32>(paths, 10.0f, 0.05f, 0.04f, 300, 300, 7859);
+		break;
+	case 64:
+		calculate_value_at_risk<64>(paths, 10.0f, 0.05f, 0.04f, 300, 300, 7859);
+		break;
+	case 128:
+		calculate_value_at_risk<128>(paths, 10.0f, 0.05f, 0.04f, 300, 300, 7859);
+		break;
+	case 256:
+		calculate_value_at_risk<256>(paths, 10.0f, 0.05f, 0.04f, 300, 300, 7859);
+		break;
+	case 512:
+		calculate_value_at_risk<512>(paths, 10.0f, 0.05f, 0.04f, 300, 300, 7859);
+		break;
+	case 1024:
+		calculate_value_at_risk<1024>(paths, 10.0f, 0.05f, 0.04f, 300, 300, 7859);
+		break;
+	default:
+		assert(false);
+	}
+} // run
 
 int main(int argc, char *argv[])
 {
@@ -269,10 +337,33 @@ int main(int argc, char *argv[])
 	query_AMP_support();
 	// run kernel once on small dataset to supress effects of lazy init and jit.
 	warm_up();
-	for (auto i(1'024); i <= 4'096; i *= 2) {
-		// create vector holding all paths
-		calculate_value_at_risk(i, 10.0f, 0.05f, 0.04f, 300, 300, 7859);
+
+	// start multi comparsion
+	file.open("measures.csv", std::ios::out);
+	// prepare header
+	file << "v ps : > ts,";
+	for (auto ts(16); ts <= 1'024; ts *= 2)
+		file << ts << ",";
+	file << std::endl;
+	// file << "Initialize time,kernel one time, copying time, kernel two time"<<std::endl;
+
+	/* prepare body, dimensions is due to the limitations on tile size and tile count of c++ AMP.
+	See https://bit.ly/2qgCeTB for details.*/
+	for (auto ps(1024); ps <= 524'288; ps *= 2) {
+		// initialize vector of problemsize, will contain endprices later.
+		std::vector<float>paths(ps);
+		// write problem size to first column
+		file << ps << ",";
+		for (auto ts(16); ts <= 1'024; ts *= 2) {
+			run(ts, paths);
+		}
+		file << std::endl;
 	}
+	// close file stream
+	file.close();
 	return 0;
 } // main
+
+
+
 
