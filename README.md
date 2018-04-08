@@ -32,11 +32,11 @@ print results
 
 ## Todos
 - [x] Prepare proposal
-- [ ] Implement MC kernel
-- [ ] Implement path array to value at risk functionality
+- [x] Implement MC kernel
+- [x] Implement path array to value at risk functionality
 - [ ] Optimize memory access, loop unrolling etc.
-- [ ] measure performance
-- [ ] Prepare presentation
+- [x] measure performance
+- [x] Prepare presentation
 - [ ] Enhance to a multi stock portfolio (optional)
 - [ ] Download historical data from quandl (optional)
 - [ ] Calculate volatility using EWMA method (optional)
