@@ -104,9 +104,6 @@ void generate_random_paths(const unsigned seed, const int size, const float init
 	const extent<1> tinyE(65'536);
 	const tinymt_collection<1> randCollection(tinyE, seed);
 
-	// start clock for GPU version after array allocation
-	//the_amp_clock::time_point start = the_amp_clock::now();
-
 	// wrap parallel_for_each in try catch to provide feedback on runtime exceptions
 	try {
 		parallel_for_each(endvalues.extent, [=, &endvalues](index<1>idx) restrict(amp) {
@@ -182,7 +179,7 @@ float min_element(concurrency::array<float, 1>& src, int elementCount) {
 	assert(elementCount / TS < 65'536);
 
 	// Using arrays as temporary memory. Array holds at least one lement
-	array<float> dst((elementCount / tile_size) ? (elementCount / tile_size) : 1);
+	array<float,1> dst((elementCount / tile_size) ? (elementCount / tile_size) : 1);
 
 	try
 	{
@@ -276,8 +273,8 @@ void calculate_value_at_risk(std::vector<float>hostEndValues, const float initia
 	std::cout << std::setw(35) << std::left << "Total time: " << elapsedTimeTotal << std::endl << std::endl;
 
 	// print value at risk
-	//std::cout << "Value at risk at " << holdingPeriod << " days with " << "100 % confidence: "
-	//	<< minResult - initialValue << " GPB (with - being risk and + being chance)" << std::endl;
+	std::cout << "Value at risk at " << holdingPeriod << " days with " << "100 % confidence: "
+		<< minResult - initialValue << " GPB (with - being risk and + being chance)" << std::endl;
 } // calculate_value_at_risk
 
 /*
