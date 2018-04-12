@@ -13,10 +13,10 @@
 #include <amp_math.h>
 #include <amp_algorithms.h>
 #include <fstream>
-
+#include <cvmarkersobj.h>
 // Need to access the concurrency libraries 
 using namespace concurrency;
-
+using namespace concurrency::diagnostic;
 // Import things we need from the standard library
 using std::chrono::duration_cast;
 using std::chrono::milliseconds;
@@ -27,6 +27,8 @@ typedef std::chrono::steady_clock the_amp_clock;
 
 std::ofstream file;
 // Define variables needed for value at risk calculation
+
+marker_series markers;
 
 void report_accelerator(const accelerator a)
 {
@@ -101,8 +103,12 @@ void generate_random_paths(const unsigned seed, const int size, const float init
 	/* todo: find out what extent is best for tinymyt_collection, large numbers lead to crash of program probably due
 	/ to memory limitations. If solved change auto t to use global idx. Small tiny collection delivers falsy results
 	meaning that a higher number of paths won't deliver a higher accurancy.*/
+
 	const extent<1> tinyE(65'536);
 	const tinymt_collection<1> randCollection(tinyE, seed);
+
+	// flag for concurrency visualizer
+	markers.write_flag(diagnostic::normal_importance, L"generate random");
 
 	// wrap parallel_for_each in try catch to provide feedback on runtime exceptions
 	try {
@@ -146,19 +152,6 @@ void generate_random_paths(const unsigned seed, const int size, const float init
 	}
 } // generate_random_paths
 
-/* Function tries reading from array_view. If index is part of array_view it's value is returned,
-otherwise the greatest float*/
-float padded_read(const array_view<float, 1>& src, const index<1>& idx) restrict(cpu, amp)
-{
-	return src.extent.contains(idx) ? src[idx] : FLT_MAX;
-} // padded_read
-/* Function tries to write to array_view, if index is part of source array_view.
-*/
-void padded_write(const array_view<float>& src, const index<1>& idx, const float& val) restrict(cpu, amp)
-{
-	if (src.extent.contains(idx))
-		src[idx] = val;
-} // padded_write
 
 /* This function returns the smallest element of an array_view calculated using an
 map reduce approach. The major part is calculated on the gpu. While the summing
@@ -170,16 +163,18 @@ template<const int tile_size>
 float min_element(concurrency::array<float, 1>& src, int elementCount) {
 
 	// check for max tile size
-	assert(tile_size >= 2 && tile_size <= 1'024)
-		// tile_size and tile_count are not matching element_count
-		assert(elementCount % TS == 0);
+	assert(tile_size >= 2 && tile_size <= 1'024);
+	// tile_size and tile_count are not matching element_count
+	assert(elementCount % TS == 0);
 	// element_count is not valid.
 	assert(elementCount < 0 && elementCount <= INT_MAX);
 	// check if number of tiles is <= 65k, which is the max in AMP
 	assert(elementCount / TS < 65'536);
 
 	// Using arrays as temporary memory. Array holds at least one lement
-	array<float,1> dst((elementCount / tile_size) ? (elementCount / tile_size) : 1);
+	array<float, 1> dst((elementCount / tile_size) ? (elementCount / tile_size) : 1);
+
+	markers.write_flag(diagnostic::normal_importance, L"reduce");
 
 	try
 	{
@@ -266,10 +261,10 @@ void calculate_value_at_risk(std::vector<float>hostEndValues, const float initia
 	// total elapsed time. It can slightly differ from the individual times due to casting
 	auto elapsedTimeTotal = duration_cast<milliseconds>(endKernelTwo - startInitialize).count();
 
-	// file << elapsedTimeTotal << ",";
-	// file << elapsedTimeInitialize << "," << elapsedTimeKernelOne << "," << elapsedTimeCopying << "," << elapsedTimeKernelTwo;
-
 	// write time to file
+	//file << elapsedTimeTotal << ",";
+	//file << elapsedTimeInitialize << "," << elapsedTimeKernelOne << "," << elapsedTimeCopying << "," << elapsedTimeKernelTwo;
+
 	std::cout << std::setw(35) << std::left << "Total time: " << elapsedTimeTotal << std::endl << std::endl;
 
 	// print value at risk
@@ -334,7 +329,7 @@ int main(int argc, char *argv[])
 	query_AMP_support();
 	// run kernel once on small dataset to supress effects of lazy init and jit.
 	warm_up();
-
+	/*
 	// start multi comparsion
 	file.open("measures.csv", std::ios::out);
 	// prepare header
@@ -342,10 +337,11 @@ int main(int argc, char *argv[])
 	for (auto ts(16); ts <= 1'024; ts *= 2)
 		file << ts << ",";
 	file << std::endl;
-	// file << "Initialize time,kernel one time, copying time, kernel two time"<<std::endl;
+	*/
 
 	/* prepare body, dimensions is due to the limitations on tile size and tile count of c++ AMP.
 	See https://bit.ly/2qgCeTB for details.*/
+	/*
 	for (auto ps(1024); ps <= 524'288; ps *= 2) {
 		// initialize vector of problemsize, will contain endprices later.
 		std::vector<float>paths(ps);
@@ -358,6 +354,13 @@ int main(int argc, char *argv[])
 	}
 	// close file stream
 	file.close();
+	*/
+
+	// test for concurrency visualizer
+	int ps(524'288), ts(128);
+	std::vector<float>paths(ps);
+	run(ts, paths);
+
 	return 0;
 } // main
 
