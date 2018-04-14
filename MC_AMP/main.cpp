@@ -14,6 +14,8 @@
 #include <amp_algorithms.h>
 #include <fstream>
 #include <cvmarkersobj.h>
+#include <tclap/CmdLine.h>
+
 // Need to access the concurrency libraries 
 using namespace concurrency;
 using namespace concurrency::diagnostic;
@@ -286,37 +288,37 @@ void warm_up() {
 by using template parameters. The tilesize must be known at compile time. An approach similar
 to this is suggested in the AMP book.
 */
-void run(const unsigned &tile_size, std::vector<float> &paths) {
+void run(const unsigned &tile_size, std::vector<float> &paths, const float initialValue = 10.0f, const float expectedReturn = 0.05f, const float volatility = 0.04f, const int tradingDays = 300, const int holdingPeriod = 300, const int seed = 7'859) {
 	switch (tile_size) {
 	case 2:
-		calculate_value_at_risk<2>(paths, 10.0f, 0.05f, 0.04f, 300, 300, 7859);
+		calculate_value_at_risk<2>(paths, initialValue, expectedReturn, volatility, tradingDays, holdingPeriod, seed);
 		break;
 	case 4:
-		calculate_value_at_risk<4>(paths, 10.0f, 0.05f, 0.04f, 300, 300, 7859);
+		calculate_value_at_risk<4>(paths, initialValue, expectedReturn, volatility, tradingDays, holdingPeriod, seed);
 		break;
 	case 8:
-		calculate_value_at_risk<8>(paths, 10.0f, 0.05f, 0.04f, 300, 300, 7859);
+		calculate_value_at_risk<8>(paths, initialValue, expectedReturn, volatility, tradingDays, holdingPeriod, seed);
 		break;
 	case 16:
-		calculate_value_at_risk<16>(paths, 10.0f, 0.05f, 0.04f, 300, 300, 7859);
+		calculate_value_at_risk<16>(paths, initialValue, expectedReturn, volatility, tradingDays, holdingPeriod, seed);
 		break;
 	case 32:
-		calculate_value_at_risk<32>(paths, 10.0f, 0.05f, 0.04f, 300, 300, 7859);
+		calculate_value_at_risk<32>(paths, initialValue, expectedReturn, volatility, tradingDays, holdingPeriod, seed);
 		break;
 	case 64:
-		calculate_value_at_risk<64>(paths, 10.0f, 0.05f, 0.04f, 300, 300, 7859);
+		calculate_value_at_risk<64>(paths, initialValue, expectedReturn, volatility, tradingDays, holdingPeriod, seed);
 		break;
 	case 128:
-		calculate_value_at_risk<128>(paths, 10.0f, 0.05f, 0.04f, 300, 300, 7859);
+		calculate_value_at_risk<128>(paths, initialValue, expectedReturn, volatility, tradingDays, holdingPeriod, seed);
 		break;
 	case 256:
-		calculate_value_at_risk<256>(paths, 10.0f, 0.05f, 0.04f, 300, 300, 7859);
+		calculate_value_at_risk<256>(paths, initialValue, expectedReturn, volatility, tradingDays, holdingPeriod, seed);
 		break;
 	case 512:
-		calculate_value_at_risk<512>(paths, 10.0f, 0.05f, 0.04f, 300, 300, 7859);
+		calculate_value_at_risk<512>(paths, initialValue, expectedReturn, volatility, tradingDays, holdingPeriod, seed);
 		break;
 	case 1024:
-		calculate_value_at_risk<1024>(paths, 10.0f, 0.05f, 0.04f, 300, 300, 7859);
+		calculate_value_at_risk<1024>(paths, initialValue, expectedReturn, volatility, tradingDays, holdingPeriod, seed);
 		break;
 	default:
 		assert(false);
@@ -325,10 +327,48 @@ void run(const unsigned &tile_size, std::vector<float> &paths) {
 
 int main(int argc, char *argv[])
 {
+	try {
+
+		TCLAP::CmdLine cmd("AMPMC", ' ', "1");
+
+		// Define the arguments
+		TCLAP::ValueArg<float> initial_value("i", "initial_value", "Initial value of the investment.", false, 10.0f, "float");
+		TCLAP::ValueArg<float> annual_return("r", "annual_return", "Annual return of the investment", false, 0.05f, "float");
+		TCLAP::ValueArg<float> annual_volatility("v", "annual_volatility", "Annual volalitility of the investment", false, 0.05f, "float");
+		TCLAP::ValueArg<int> trading_days("t", "trading_days", "Annual trading days", false, 300, "int");
+		TCLAP::ValueArg<int> holding_period("d", "duration", "Duration of the investment", false, 300, "int");
+		TCLAP::ValueArg<int> seed("s", "seed", "Seed for random number generator", false, 7'859, "int");
+		TCLAP::ValueArg<int> paths("p", "paths", "Number of paths", false, 1'024, "int");
+		TCLAP::ValueArg<int> tile_size("x", "tile_size", "Size of tiles", false, 16, "int");
+		cmd.add(initial_value);
+		cmd.add(annual_return);
+		cmd.add(annual_volatility);
+		cmd.add(trading_days);
+		cmd.add(holding_period);
+		cmd.add(seed);
+		cmd.add(paths);
+		cmd.add(tile_size);
+		// Parse arguments
+		cmd.parse(argc, argv);
+
+		// Check AMP support
+		query_AMP_support();
+
+		// run kernel once on small dataset to supress effects of lazy init and jit.
+		warm_up();
+
+		// run kernel as set by specified arguments
+		std::vector<float>pathVector(paths.getValue());
+		run(tile_size.getValue(), pathVector, initial_value.getValue(), annual_return.getValue(), annual_volatility.getValue(), trading_days.getValue(), holding_period.getValue(), seed.getValue());
+	}
+	catch (TCLAP::ArgException &e) {
+		std::cout << "error: " << e.error() << " for arg " << e.argId() << std::endl;
+	}
+
 	// Check AMP support
-	query_AMP_support();
+	//query_AMP_support();
 	// run kernel once on small dataset to supress effects of lazy init and jit.
-	warm_up();
+	//warm_up();
 	/*
 	// start multi comparsion
 	file.open("measures.csv", std::ios::out);
@@ -355,12 +395,12 @@ int main(int argc, char *argv[])
 	// close file stream
 	file.close();
 	*/
-
+	/*
 	// test for concurrency visualizer
 	int ps(524'288), ts(128);
 	std::vector<float>paths(ps);
 	run(ts, paths);
-
+	*/
 	return 0;
 } // main
 
