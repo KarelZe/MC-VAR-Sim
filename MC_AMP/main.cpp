@@ -1,13 +1,11 @@
-
 #define NOMINMAX
 
 #include <fstream>
-#include <assert.h>
+#include <cassert>
 #include <chrono>
 #include <iostream>
 #include <iomanip>
 #include <amp.h>
-#include <time.h>
 #include <string>
 #include <amp_tinymt_rng.h>
 #include <amp_math.h>
@@ -18,7 +16,7 @@
 
 // Need to access the concurrency libraries 
 using namespace concurrency;
-using namespace concurrency::diagnostic;
+using namespace diagnostic;
 // Import things we need from the standard library
 using std::chrono::duration_cast;
 using std::chrono::milliseconds;
@@ -34,10 +32,11 @@ marker_series markers;
 
 void report_accelerator(const accelerator a)
 {
-	const std::wstring bs[2] = { L"false", L"true" };
+	const std::wstring bs[2] = {L"false", L"true"};
 	std::wcout << ": " << a.description << " "
 		<< std::endl << "       device_path                       = " << a.device_path
-		<< std::endl << "       dedicated_memory                  = " << std::setprecision(4) << float(a.dedicated_memory) / (1024.0f * 1024.0f) << " Mb"
+		<< std::endl << "       dedicated_memory                  = " << std::setprecision(4) << float(a.dedicated_memory) / (
+			1024.0f * 1024.0f) << " Mb"
 		<< std::endl << "       has_display                       = " << bs[a.has_display]
 		<< std::endl << "       is_debug                          = " << bs[a.is_debug]
 		<< std::endl << "       is_emulated                       = " << bs[a.is_emulated]
@@ -45,6 +44,7 @@ void report_accelerator(const accelerator a)
 		<< std::endl << "       supports_limited_double_precision = " << bs[a.supports_limited_double_precision]
 		<< std::endl;
 }
+
 // List and select the accelerator to use. If default accelerator is reference implementation, a warning is thrown.
 void list_accelerators()
 {
@@ -52,9 +52,8 @@ void list_accelerators()
 	std::vector<accelerator> accls = accelerator::get_all();
 
 	// iterates over all accelerators and print characteristics
-	for (unsigned i(0); i < accls.size(); i++)
+	for (const auto& a : accls)
 	{
-		accelerator a = accls[i];
 		report_accelerator(a);
 	}
 
@@ -65,8 +64,8 @@ void list_accelerators()
 		std::wcout << "Running on very slow emulator! Only use this accelerator for debugging." << std::endl;
 } // list_accelerators
 
-  // query if AMP accelerator exists on hardware
-void query_AMP_support()
+// query if AMP accelerator exists on hardware
+void query_amp_support()
 {
 	std::vector<accelerator> accls = accelerator::get_all();
 	if (accls.empty())
@@ -80,25 +79,27 @@ void query_AMP_support()
 	}
 } // query_AMP_support
 
-  /*
-  This function transforms uniformly distributed variables to normally distributed variables
-  using the Cartesian form Box Muller transform. Box Muller is inferior in speed to Ziggurat
-  algorithm but simpler to implemnt. That's why I've chosen Box Muller over Ziggurat algorithm.
-  Snippet is adapted from a Microsoft sample. See https://goo.gl/cU6b1X for details.
-  */
+/*
+This function transforms uniformly distributed variables to normally distributed variables
+using the Cartesian form Box Muller transform. Box Muller is inferior in speed to Ziggurat
+algorithm but simpler to implemnt. That's why I've chosen Box Muller over Ziggurat algorithm.
+Snippet is adapted from a Microsoft sample. See https://goo.gl/cU6b1X for details.
+*/
 void box_muller_transform(float& u1, float& u2) restrict(amp)
 {
-	float r = fast_math::sqrt(-2.0f * fast_math::log(u1));
-	float phi = 2.0f * 3.14159265358979f * u2;
+	const float r = fast_math::sqrt(-2.0f * fast_math::log(u1));
+	const float phi = 2.0f * 3.14159265358979f * u2;
 	u1 = r * fast_math::cos(phi);
 	u2 = r * fast_math::sin(phi);
 } // box_muller_transform
 
-  /* This function calculates random paths using geometric brownian motion (GBM) for a given holding period. For
-  details on geometric brownian motion see: https://goo.gl/lrCeLJ.
-  */
-void generate_random_paths(const unsigned seed, const int size, const float initialValue, const float expectedReturn, const float volatility, const int tradingDays, const int holdingPeriod, concurrency::array<float>& endvalues) {
-
+/* This function calculates random paths using geometric brownian motion (GBM) for a given holding period. For
+details on geometric brownian motion see: https://goo.gl/lrCeLJ.
+*/
+void generate_random_paths(const unsigned seed, const int size, const float initial_value, const float expected_return,
+                           const float volatility, const int trading_days, const int holding_period,
+                           array<float>& endvalues)
+{
 	// validate that given input is optimal
 	assert(holdingPeriod % 2 == 0);
 
@@ -106,51 +107,52 @@ void generate_random_paths(const unsigned seed, const int size, const float init
 	/ to memory limitations. If solved change auto t to use global idx. Small tiny collection delivers falsy results
 	meaning that a higher number of paths won't deliver a higher accurancy.*/
 
-	const extent<1> tinyE(65'536);
-	const tinymt_collection<1> randCollection(tinyE, seed);
+	const extent<1> tiny_e(65'536);
+	const tinymt_collection<1> rand_collection(tiny_e, seed);
 
 	// flag for concurrency visualizer
-	markers.write_flag(diagnostic::normal_importance, L"generate random");
+	markers.write_flag(normal_importance, L"generate random");
 
 	// wrap parallel_for_each in try catch to provide feedback on runtime exceptions
-	try {
-		parallel_for_each(endvalues.extent, [=, &endvalues](index<1>idx) restrict(amp) {
-
+	try
+	{
+		parallel_for_each(endvalues.extent, [=, &endvalues](index<1> idx) restrict(amp)
+		{
 			float s(0.0f);
-			float prevS(initialValue);
-			auto t = randCollection[idx % 16'384];
+			float prev_s(initial_value);
+			auto t = rand_collection[idx % 16'384];
 
 			// see https://goo.gl/Rb394n for rationelle behind modifying drift and volatility.
 			// scale drift to timestep
-			const float dailyDrift = expectedReturn / tradingDays;
+			const float daily_drift = expected_return / trading_days;
 			// scale volatility to timestep. Volatility scales with square root of time.
 			// Use rsqrt for performance reasons (See Chapter 7 AMP-Book)
-			const float dailyVolatility = volatility * fast_math::rsqrtf(static_cast<float>(tradingDays));
+			const float daily_volatility = volatility * fast_math::rsqrtf(static_cast<float>(trading_days));
 			// extract volatility from daily drift
-			const float meanDrift = dailyDrift - 0.5f * dailyVolatility * dailyVolatility;
+			const float mean_drift = daily_drift - 0.5f * daily_volatility * daily_volatility;
 			// generate path for entire holding period, write endprices back to vector
-			for (auto day(1); day <= holdingPeriod / 2; day++) {
-
+			for (auto day(1); day <= holding_period / 2; day++)
+			{
 				// generate two random numbers and convert to normally distributed numbers
 				auto z0 = t.next_single();
 				auto z1 = t.next_single();
 				box_muller_transform(z0, z1);
 
 				// Using loop unrolling for performance optimizatation, limit minimum price to 0
-				float ds = meanDrift + dailyVolatility * z0;
-				s = fast_math::fmax(prevS * fast_math::expf(ds), 0.0f);
-				prevS = s;
+				float ds = mean_drift + daily_volatility * z0;
+				s = fast_math::fmax(prev_s * fast_math::expf(ds), 0.0f);
+				prev_s = s;
 
-				ds = meanDrift + dailyVolatility * z1;
-				s = fast_math::fmax(prevS * fast_math::expf(ds), 0.0f);
-				prevS = s;
+				ds = mean_drift + daily_volatility * z1;
+				s = fast_math::fmax(prev_s * fast_math::expf(ds), 0.0f);
+				prev_s = s;
 			}
 			endvalues[idx] = s;
 		});
 	}
-	catch (const Concurrency::runtime_exception& ex)
+	catch (const runtime_exception& ex)
 	{
-		MessageBoxA(NULL, ex.what(), "Error", MB_ICONERROR);
+		MessageBoxA(nullptr, ex.what(), "Error", MB_ICONERROR);
 	}
 } // generate_random_paths
 
@@ -161,9 +163,9 @@ of the tiles is done on the gpu. In case of an error 0 is returned.
 Tile size needs to be known at compile time. That's why I am using template arguments
 here.
 */
-template<const int tile_size>
-float min_element(concurrency::array<float, 1>& src, int elementCount) {
-
+template <const int TileSize>
+float min_element(array<float, 1>& src, int element_count)
+{
 	// check for max tile size
 	assert(tile_size >= 2 && tile_size <= 1'024);
 	// tile_size and tile_count are not matching element_count
@@ -174,167 +176,183 @@ float min_element(concurrency::array<float, 1>& src, int elementCount) {
 	assert(elementCount / TS < 65'536);
 
 	// Using arrays as temporary memory. Array holds at least one lement
-	array<float, 1> dst((elementCount / tile_size) ? (elementCount / tile_size) : 1);
+	array<float, 1> dst((element_count / TileSize) ? (element_count / TileSize) : 1);
 
-	markers.write_flag(diagnostic::normal_importance, L"reduce");
+	markers.write_flag(normal_importance, L"reduce");
 
 	try
 	{
 		// Reduce using parallel_for_each as long as the sequence length
 		// is evenly divisable to the number of threads in the tile.
-		while ((elementCount % tile_size) == 0)
+		while ((element_count % TileSize) == 0)
 		{
-			parallel_for_each(extent<1>(elementCount).tile<tile_size>(), [=, &src, &dst](tiled_index<tile_size> tidx) restrict(amp)
-			{
-				// Use tile_static as a scratchpad memory.
-				tile_static float tile_data[tile_size];
+			parallel_for_each(extent<1>(element_count).tile<TileSize>(),
+			                  [=, &src, &dst](tiled_index<TileSize> tidx) restrict(amp)
+			                  {
+				                  // Use tile_static as a scratchpad memory.
+				                  tile_static float tile_data[TileSize];
 
-				unsigned local_idx = tidx.local[0];
-				tile_data[local_idx] = src[tidx.global];
-				tidx.barrier.wait();
+				                  unsigned local_idx = tidx.local[0];
+				                  tile_data[local_idx] = src[tidx.global];
+				                  tidx.barrier.wait();
 
-				for (unsigned s = tile_size / 2; s > 0; s /= 2) {
-					if (local_idx < s) {
-						tile_data[local_idx] = fast_math::fmin(tile_data[local_idx], tile_data[local_idx + s]);
-					}
-					tidx.barrier.wait();
-				}
-				// Store the tile result in the global memory.
-				if (local_idx == 0)
-				{
-					dst[tidx.tile] = tile_data[0];
-				}
-			});
+				                  for (unsigned s = TileSize / 2; s > 0; s /= 2)
+				                  {
+					                  if (local_idx < s)
+					                  {
+						                  tile_data[local_idx] = fast_math::fmin(tile_data[local_idx], tile_data[local_idx + s]);
+					                  }
+					                  tidx.barrier.wait();
+				                  }
+				                  // Store the tile result in the global memory.
+				                  if (local_idx == 0)
+				                  {
+					                  dst[tidx.tile] = tile_data[0];
+				                  }
+			                  });
 			// Update the sequence length, swap source with destination.
-			elementCount /= tile_size;
+			element_count /= TileSize;
 			std::swap(src, dst);
 		}
 		// Perform any remaining reduction on the CPU.
-		std::vector<float> result(elementCount);
+		std::vector<float> result(element_count);
 
 		// copy only part of array_view back to host, which contains the minimal elements (for performance reasons)
-		copy(src.section(0, elementCount), result.begin());
+		copy(src.section(0, element_count), result.begin());
 
 		// reduce all remaining tiles on the cpu
-		auto idx = std::min_element(result.begin(), result.end());
+		const auto idx = std::min_element(result.begin(), result.end());
 		return result.at(idx - result.begin());
 	}
-	catch (const Concurrency::runtime_exception& ex)
+	catch (const runtime_exception& ex)
 	{
-		MessageBoxA(NULL, ex.what(), "Error", MB_ICONERROR);
+		MessageBoxA(nullptr, ex.what(), "Error", MB_ICONERROR);
 	}
 	return 0;
 } // min_element
 
-  /* This function calculates the value at risk at a confidence level of 100 % by calling the generate_random_paths function and by extracting
-  the endvalue at rank 0. The functionality is similar to stl::min_element()*/
-template<const int tile_size>
-void calculate_value_at_risk(std::vector<float>hostEndValues, const float initialValue, const float expectedReturn, const float volatility, const int tradingDays, const int holdingPeriod, const int seed = 7859) {
-
+/* This function calculates the value at risk at a confidence level of 100 % by calling the generate_random_paths function and by extracting
+the endvalue at rank 0. The functionality is similar to stl::min_element()*/
+template <const int TileSize>
+void calculate_value_at_risk(std::vector<float>& host_end_values, const float initial_value,
+                             const float expected_return,
+                             const float volatility, const int trading_days, const int holding_period,
+                             const int seed)
+{
 	// time taken to initialize, no copying of data, entire implementation uses array instead of array_view to be able to measure copying times as well (cmp. p. 131 AMP book) 
-	the_amp_clock::time_point startInitialize = the_amp_clock::now();
-	array<float> gpuEndValues(hostEndValues.size());
-	gpuEndValues.accelerator_view.wait();
-	the_amp_clock::time_point endInitialize = the_amp_clock::now();
-	auto elapsedTimeInitialize = duration_cast<milliseconds>(endInitialize - startInitialize).count();
-	std::cout << std::setw(35) << std::left << "Initialize time: " << elapsedTimeInitialize << std::endl;
+	const the_amp_clock::time_point start_initialize = the_amp_clock::now();
+	array<float> gpu_end_values(host_end_values.size());
+	gpu_end_values.accelerator_view.wait();
+	const the_amp_clock::time_point end_initialize = the_amp_clock::now();
+	const auto elapsed_time_initialize = duration_cast<milliseconds>(end_initialize - start_initialize).count();
+	std::cout << std::setw(35) << std::left << "Initialize time: " << elapsed_time_initialize << std::endl;
 
 	// first kernel: generate random paths
-	generate_random_paths(seed, hostEndValues.size(), initialValue, expectedReturn, volatility, tradingDays, holdingPeriod, gpuEndValues);
-	gpuEndValues.accelerator_view.wait();
-	the_amp_clock::time_point endKernelOne = the_amp_clock::now();
-	auto elapsedTimeKernelOne = duration_cast<milliseconds>(endKernelOne - endInitialize).count();
-	std::cout << std::setw(35) << std::left << "Kernel one time: " << elapsedTimeKernelOne << std::endl;
+	generate_random_paths(seed, host_end_values.size(), initial_value, expected_return, volatility, trading_days,
+	                      holding_period,
+	                      gpu_end_values);
+	gpu_end_values.accelerator_view.wait();
+	the_amp_clock::time_point const end_kernel_one = the_amp_clock::now();
+	const auto elapsed_time_kernel_one = duration_cast<milliseconds>(end_kernel_one - end_initialize).count();
+	std::cout << std::setw(35) << std::left << "Kernel one time: " << elapsed_time_kernel_one << std::endl;
 
 	// write endvalues back to host for further investigation
-	copy(gpuEndValues, hostEndValues.begin());
-	gpuEndValues.accelerator_view.wait();
-	the_amp_clock::time_point endCopy = the_amp_clock::now();
-	auto elapsedTimeCopying = duration_cast<milliseconds>(endCopy - endKernelOne).count();
-	std::cout << std::setw(35) << std::left << "copying time: " << elapsedTimeCopying << std::endl;
+	copy(gpu_end_values, host_end_values.begin());
+	gpu_end_values.accelerator_view.wait();
+	the_amp_clock::time_point const end_copy = the_amp_clock::now();
+	auto const elapsed_time_copying = duration_cast<milliseconds>(end_copy - end_kernel_one).count();
+	std::cout << std::setw(35) << std::left << "copying time: " << elapsed_time_copying << std::endl;
 
 	// second kernel: rearrange elements to obtain element at rank 0
-	float minResult = min_element<tile_size>(gpuEndValues, hostEndValues.size());
-	gpuEndValues.accelerator_view.wait();
-	the_amp_clock::time_point endKernelTwo = the_amp_clock::now();
-	auto elapsedTimeKernelTwo = duration_cast<milliseconds>(endKernelTwo - endCopy).count();
-	std::cout << std::setw(35) << std::left << "Kernel two time: " << elapsedTimeKernelTwo << std::endl;
+	auto min_result = min_element<TileSize>(gpu_end_values, host_end_values.size());
+	gpu_end_values.accelerator_view.wait();
+	const auto end_kernel_two = the_amp_clock::now();
+	const auto elapsed_time_kernel_two = duration_cast<milliseconds>(end_kernel_two - end_copy).count();
+	std::cout << std::setw(35) << std::left << "Kernel two time: " << elapsed_time_kernel_two << std::endl;
 
 	// total elapsed time. It can slightly differ from the individual times due to casting
-	auto elapsedTimeTotal = duration_cast<milliseconds>(endKernelTwo - startInitialize).count();
+	const auto elapsed_time_total = duration_cast<milliseconds>(end_kernel_two - start_initialize).count();
 
 	// write time to file
 	//file << elapsedTimeTotal << ",";
 	//file << elapsedTimeInitialize << "," << elapsedTimeKernelOne << "," << elapsedTimeCopying << "," << elapsedTimeKernelTwo;
 
-	std::cout << std::setw(35) << std::left << "Total time: " << elapsedTimeTotal << std::endl << std::endl;
+	std::cout << std::setw(35) << std::left << "Total time: " << elapsed_time_total << std::endl << std::endl;
 
 	// print value at risk
-	std::cout << "Value at risk at " << holdingPeriod << " days with " << "100 % confidence: "
-		<< minResult - initialValue << " GPB (with - being risk and + being chance)" << std::endl;
+	std::cout << "Value at risk at " << holding_period << " days with " << "100 % confidence: "
+		<< min_result - initial_value << " GPB (with - being risk and + being chance)" << std::endl;
 } // calculate_value_at_risk
 
 /*
 Helper function to avoid lazy initialization and just in time overhead (JIT) on first execution.
 For details see: https://goo.gl/DPZuGU */
-void warm_up() {
-	std::vector<float>paths(1024, 0);
+void warm_up()
+{
+	std::vector<float> paths(1024, 0);
 	// run kernel with minimal dataset
 	calculate_value_at_risk<4>(paths, 10.0f, 0.05f, 0.04f, 300, 300, 7859);
-	std::cout << "------------------------------------- valid results starting from here -------------------------------------" << std::endl;
+	std::cout <<
+		"------------------------------------- valid results starting from here -------------------------------------" << std
+		::endl;
 } // warm_up
 
 /* This is wrapper function around calculate_value_at_risk. It lets the tile_size dynamically
 by using template parameters. The tilesize must be known at compile time. An approach similar
 to this is suggested in the AMP book.
 */
-void run(const unsigned &tile_size, std::vector<float> &paths, const float initialValue = 10.0f, const float expectedReturn = 0.05f, const float volatility = 0.04f, const int tradingDays = 300, const int holdingPeriod = 300, const int seed = 7'859) {
-	switch (tile_size) {
+void run(const unsigned& tile_size, std::vector<float>& paths, const float initial_value = 10.0f,
+         const float expected_return = 0.05f, const float volatility = 0.04f, const int trading_days = 300,
+         const int holding_period = 300, const int seed = 7'859)
+{
+	switch (tile_size)
+	{
 	case 2:
-		calculate_value_at_risk<2>(paths, initialValue, expectedReturn, volatility, tradingDays, holdingPeriod, seed);
+		calculate_value_at_risk<2>(paths, initial_value, expected_return, volatility, trading_days, holding_period, seed);
 		break;
 	case 4:
-		calculate_value_at_risk<4>(paths, initialValue, expectedReturn, volatility, tradingDays, holdingPeriod, seed);
+		calculate_value_at_risk<4>(paths, initial_value, expected_return, volatility, trading_days, holding_period, seed);
 		break;
 	case 8:
-		calculate_value_at_risk<8>(paths, initialValue, expectedReturn, volatility, tradingDays, holdingPeriod, seed);
+		calculate_value_at_risk<8>(paths, initial_value, expected_return, volatility, trading_days, holding_period, seed);
 		break;
 	case 16:
-		calculate_value_at_risk<16>(paths, initialValue, expectedReturn, volatility, tradingDays, holdingPeriod, seed);
+		calculate_value_at_risk<16>(paths, initial_value, expected_return, volatility, trading_days, holding_period, seed);
 		break;
 	case 32:
-		calculate_value_at_risk<32>(paths, initialValue, expectedReturn, volatility, tradingDays, holdingPeriod, seed);
+		calculate_value_at_risk<32>(paths, initial_value, expected_return, volatility, trading_days, holding_period, seed);
 		break;
 	case 64:
-		calculate_value_at_risk<64>(paths, initialValue, expectedReturn, volatility, tradingDays, holdingPeriod, seed);
+		calculate_value_at_risk<64>(paths, initial_value, expected_return, volatility, trading_days, holding_period, seed);
 		break;
 	case 128:
-		calculate_value_at_risk<128>(paths, initialValue, expectedReturn, volatility, tradingDays, holdingPeriod, seed);
+		calculate_value_at_risk<128>(paths, initial_value, expected_return, volatility, trading_days, holding_period, seed);
 		break;
 	case 256:
-		calculate_value_at_risk<256>(paths, initialValue, expectedReturn, volatility, tradingDays, holdingPeriod, seed);
+		calculate_value_at_risk<256>(paths, initial_value, expected_return, volatility, trading_days, holding_period, seed);
 		break;
 	case 512:
-		calculate_value_at_risk<512>(paths, initialValue, expectedReturn, volatility, tradingDays, holdingPeriod, seed);
+		calculate_value_at_risk<512>(paths, initial_value, expected_return, volatility, trading_days, holding_period, seed);
 		break;
 	case 1024:
-		calculate_value_at_risk<1024>(paths, initialValue, expectedReturn, volatility, tradingDays, holdingPeriod, seed);
+		calculate_value_at_risk<1024>(paths, initial_value, expected_return, volatility, trading_days, holding_period, seed);
 		break;
 	default:
 		assert(false);
 	}
 } // run
 
-int main(int argc, char *argv[])
+int main(int argc, char* argv[])
 {
-	try {
-
+	try
+	{
 		TCLAP::CmdLine cmd("AMPMC", ' ', "1");
 
 		// Define the arguments
 		TCLAP::ValueArg<float> initial_value("i", "initial_value", "Initial value of the investment.", false, 10.0f, "float");
 		TCLAP::ValueArg<float> annual_return("r", "annual_return", "Annual return of the investment", false, 0.05f, "float");
-		TCLAP::ValueArg<float> annual_volatility("v", "annual_volatility", "Annual volalitility of the investment", false, 0.05f, "float");
+		TCLAP::ValueArg<float> annual_volatility("v", "annual_volatility", "Annual volalitility of the investment", false,
+		                                         0.05f, "float");
 		TCLAP::ValueArg<int> trading_days("t", "trading_days", "Annual trading days", false, 300, "int");
 		TCLAP::ValueArg<int> holding_period("d", "duration", "Duration of the investment", false, 300, "int");
 		TCLAP::ValueArg<int> seed("s", "seed", "Seed for random number generator", false, 7'859, "int");
@@ -352,16 +370,18 @@ int main(int argc, char *argv[])
 		cmd.parse(argc, argv);
 
 		// Check AMP support
-		query_AMP_support();
+		query_amp_support();
 
 		// run kernel once on small dataset to supress effects of lazy init and jit.
 		warm_up();
 
 		// run kernel as set by specified arguments
-		std::vector<float>pathVector(paths.getValue());
-		run(tile_size.getValue(), pathVector, initial_value.getValue(), annual_return.getValue(), annual_volatility.getValue(), trading_days.getValue(), holding_period.getValue(), seed.getValue());
+		std::vector<float> path_vector(paths.getValue());
+		run(tile_size.getValue(), path_vector, initial_value.getValue(), annual_return.getValue(),
+		    annual_volatility.getValue(), trading_days.getValue(), holding_period.getValue(), seed.getValue());
 	}
-	catch (TCLAP::ArgException &e) {
+	catch (TCLAP::ArgException& e)
+	{
 		std::cout << "error: " << e.error() << " for arg " << e.argId() << std::endl;
 	}
 
@@ -403,7 +423,3 @@ int main(int argc, char *argv[])
 	*/
 	return 0;
 } // main
-
-
-
-
