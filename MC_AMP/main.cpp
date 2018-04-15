@@ -96,7 +96,7 @@ void box_muller_transform(float& u1, float& u2) restrict(amp)
 /* This function calculates random paths using geometric brownian motion (GBM) for a given holding period. For
 details on geometric brownian motion see: https://goo.gl/lrCeLJ.
 */
-void generate_random_paths(const unsigned seed, const int size, const float initial_value, const float expected_return,
+void generate_random_paths(const unsigned seed, const float initial_value, const float expected_return,
                            const float volatility, const int trading_days, const int holding_period,
                            array<float>& endvalues)
 {
@@ -176,7 +176,7 @@ float min_element(array<float, 1>& src, int element_count)
 	assert(elementCount / TS < 65'536);
 
 	// Using arrays as temporary memory. Array holds at least one lement
-	array<float, 1> dst((element_count / TileSize) ? (element_count / TileSize) : 1);
+	array<float, 1> dst(element_count / TileSize ? element_count / TileSize : 1);
 
 	markers.write_flag(normal_importance, L"reduce");
 
@@ -184,7 +184,7 @@ float min_element(array<float, 1>& src, int element_count)
 	{
 		// Reduce using parallel_for_each as long as the sequence length
 		// is evenly divisable to the number of threads in the tile.
-		while ((element_count % TileSize) == 0)
+		while (element_count % TileSize == 0)
 		{
 			parallel_for_each(extent<1>(element_count).tile<TileSize>(),
 			                  [=, &src, &dst](tiled_index<TileSize> tidx) restrict(amp)
@@ -240,26 +240,25 @@ void calculate_value_at_risk(std::vector<float>& host_end_values, const float in
                              const int seed)
 {
 	// time taken to initialize, no copying of data, entire implementation uses array instead of array_view to be able to measure copying times as well (cmp. p. 131 AMP book) 
-	const the_amp_clock::time_point start_initialize = the_amp_clock::now();
+	const auto start_initialize = the_amp_clock::now();
 	array<float> gpu_end_values(host_end_values.size());
 	gpu_end_values.accelerator_view.wait();
-	const the_amp_clock::time_point end_initialize = the_amp_clock::now();
+	const auto end_initialize = the_amp_clock::now();
 	const auto elapsed_time_initialize = duration_cast<milliseconds>(end_initialize - start_initialize).count();
 	std::cout << std::setw(35) << std::left << "Initialize time: " << elapsed_time_initialize << std::endl;
 
 	// first kernel: generate random paths
-	generate_random_paths(seed, host_end_values.size(), initial_value, expected_return, volatility, trading_days,
-	                      holding_period,
+	generate_random_paths(seed, initial_value, expected_return, volatility, trading_days, holding_period,
 	                      gpu_end_values);
 	gpu_end_values.accelerator_view.wait();
-	the_amp_clock::time_point const end_kernel_one = the_amp_clock::now();
+	auto const end_kernel_one = the_amp_clock::now();
 	const auto elapsed_time_kernel_one = duration_cast<milliseconds>(end_kernel_one - end_initialize).count();
 	std::cout << std::setw(35) << std::left << "Kernel one time: " << elapsed_time_kernel_one << std::endl;
 
 	// write endvalues back to host for further investigation
 	copy(gpu_end_values, host_end_values.begin());
 	gpu_end_values.accelerator_view.wait();
-	the_amp_clock::time_point const end_copy = the_amp_clock::now();
+	auto const end_copy = the_amp_clock::now();
 	auto const elapsed_time_copying = duration_cast<milliseconds>(end_copy - end_kernel_one).count();
 	std::cout << std::setw(35) << std::left << "copying time: " << elapsed_time_copying << std::endl;
 
@@ -274,7 +273,7 @@ void calculate_value_at_risk(std::vector<float>& host_end_values, const float in
 	const auto elapsed_time_total = duration_cast<milliseconds>(end_kernel_two - start_initialize).count();
 
 	// write time to file
-	//file << elapsedTimeTotal << ",";
+	//file << elapsed_time_kernel_two << ",";
 	//file << elapsedTimeInitialize << "," << elapsedTimeKernelOne << "," << elapsedTimeCopying << "," << elapsedTimeKernelTwo;
 
 	std::cout << std::setw(35) << std::left << "Total time: " << elapsed_time_total << std::endl << std::endl;
@@ -344,6 +343,7 @@ void run(const unsigned& tile_size, std::vector<float>& paths, const float initi
 
 int main(int argc, char* argv[])
 {
+
 	try
 	{
 		TCLAP::CmdLine cmd("AMPMC", ' ', "1");
@@ -384,7 +384,7 @@ int main(int argc, char* argv[])
 	{
 		std::cout << "error: " << e.error() << " for arg " << e.argId() << std::endl;
 	}
-
+	
 	// Check AMP support
 	//query_AMP_support();
 	// run kernel once on small dataset to supress effects of lazy init and jit.
