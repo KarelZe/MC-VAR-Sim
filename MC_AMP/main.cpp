@@ -14,20 +14,17 @@
 #include <cvmarkersobj.h>
 #include <tclap/CmdLine.h>
 
-// Need to access the concurrency libraries 
 using namespace concurrency;
 using namespace diagnostic;
-// Import things we need from the standard library
+
 using std::chrono::duration_cast;
 using std::chrono::milliseconds;
 
-// Define the alias "the_clock" for the clock type we're going to use.
 typedef std::chrono::steady_clock the_serial_clock;
 typedef std::chrono::steady_clock the_amp_clock;
 
-std::ofstream file;
-// Define variables needed for value at risk calculation
 
+std::ofstream file;
 marker_series markers;
 
 void report_accelerator(const accelerator a)
@@ -59,7 +56,6 @@ void list_accelerators()
 
 	const accelerator acc = accelerator(accelerator::default_accelerator);
 	std::wcout << " default acc = " << acc.description << std::endl;
-	// todo: replace with assert?
 	if (acc == accelerator(accelerator::direct3d_ref))
 		std::wcout << "Running on very slow emulator! Only use this accelerator for debugging." << std::endl;
 } // list_accelerators
@@ -103,11 +99,12 @@ void generate_random_paths(const unsigned seed, const float initial_value, const
 	// validate that given input is optimal
 	assert(holdingPeriod % 2 == 0);
 
-	/* todo: find out what extent is best for tinymyt_collection, large numbers lead to crash of program probably due
-	/ to memory limitations. If solved change auto t to use global idx. Small tiny collection delivers falsy results
-	meaning that a higher number of paths won't deliver a higher accurancy.*/
-
-	const extent<1> tiny_e(65'536);
+	/* tinymt_collection is a wrapper around concurrency::array. Its maximum extent is at 65'536 due to the way how the rng
+	 * is implemented. It copies precalculated numbers into an concurrency::array. Total number of predefined numbers is 65'536.
+	 * This impacts the calculation in a way, that more paths do not yield in more accurate simulation results.
+	 */
+	const unsigned rank = holding_period * endvalues.extent[0] > 65'536 ? 65'536 : holding_period * endvalues.extent[0];
+	const extent<1> tiny_e(rank);
 	const tinymt_collection<1> rand_collection(tiny_e, seed);
 
 	// flag for concurrency visualizer
@@ -120,9 +117,9 @@ void generate_random_paths(const unsigned seed, const float initial_value, const
 		{
 			float s(0.0f);
 			float prev_s(initial_value);
-			auto t = rand_collection[idx % 16'384];
-
-			// see https://goo.gl/Rb394n for rationelle behind modifying drift and volatility.
+			// modify index if number is greater than size of tinymt_collection
+			auto t = rand_collection[idx % 65'535];
+			// implementation follows a Geometric brownian motion model. See https://bit.ly/2HLeqPS for rationalle behind it.
 			// scale drift to timestep
 			const float daily_drift = expected_return / trading_days;
 			// scale volatility to timestep. Volatility scales with square root of time.
@@ -175,7 +172,7 @@ float min_element(array<float, 1>& src, int element_count)
 	// check if number of tiles is <= 65k, which is the max in AMP
 	assert(elementCount / TS < 65'536);
 
-	// Using arrays as temporary memory. Array holds at least one lement
+	// Using arrays as temporary memory. Array holds at least one element
 	array<float, 1> dst(element_count / TileSize ? element_count / TileSize : 1);
 
 	markers.write_flag(normal_importance, L"reduce");
@@ -184,8 +181,10 @@ float min_element(array<float, 1>& src, int element_count)
 	{
 		// Reduce using parallel_for_each as long as the sequence length
 		// is evenly divisable to the number of threads in the tile.
+		// todo: rethink while loop condition to support padded compute domains
 		while (element_count % TileSize == 0)
 		{
+			// todo: pad compute domain
 			parallel_for_each(extent<1>(element_count).tile<TileSize>(),
 				[=, &src, &dst](tiled_index<TileSize> tidx) restrict(amp)
 			{
@@ -274,7 +273,11 @@ void calculate_value_at_risk(std::vector<float>& host_end_values, const float in
 
 	// write time to file
 	//file << elapsed_time_kernel_two << ",";
-	//file << elapsedTimeInitialize << "," << elapsedTimeKernelOne << "," << elapsedTimeCopying << "," << elapsedTimeKernelTwo;
+	file << elapsed_time_initialize << "," << elapsed_time_kernel_one << "," << elapsed_time_copying << "," << elapsed_time_kernel_two << std::endl;
+	//file << "Initialize" << "," << elapsed_time_initialize << std::endl;
+	//file << "Kernel one" << "," << elapsed_time_kernel_one << std::endl;
+	//file << "Copying" << "," << elapsed_time_copying << std::endl;
+	//file << "Kernel two" << "," << elapsed_time_kernel_two << std::endl;
 
 	std::cout << std::setw(35) << std::left << "Total time: " << elapsed_time_total << std::endl << std::endl;
 
@@ -302,7 +305,7 @@ to this is suggested in the AMP book.
 */
 void run(const unsigned& tile_size, std::vector<float>& paths, const float initial_value = 10.0f,
 	const float expected_return = 0.05f, const float volatility = 0.04f, const int trading_days = 300,
-	const int holding_period = 300, const int seed = 7'859)
+	const int holding_period = 300, const int seed = 50'000)
 {
 	switch (tile_size)
 	{
@@ -386,41 +389,53 @@ int main(int argc, char* argv[])
 	}
 	*/
 	// Check AMP support
-	//query_AMP_support();
+	query_amp_support();
 	// run kernel once on small dataset to supress effects of lazy init and jit.
-	//warm_up();
-	/*
-	// start multi comparsion
-	file.open("measures.csv", std::ios::out);
-	// prepare header
-	file << "v ps : > ts,";
-	for (auto ts(16); ts <= 1'024; ts *= 2)
-		file << ts << ",";
-	file << std::endl;
-	*/
+	warm_up();
 
-	/* prepare body, dimensions is due to the limitations on tile size and tile count of c++ AMP.
-	See https://bit.ly/2qgCeTB for details.*/
-	/*
-	for (auto ps(1024); ps <= 524'288; ps *= 2) {
-		// initialize vector of problemsize, will contain endprices later.
-		std::vector<float>paths(ps);
-		// write problem size to first column
-		file << ps << ",";
-		for (auto ts(16); ts <= 1'024; ts *= 2) {
-			run(ts, paths);
+	// start multi comparsion
+	//for (auto ps(1024); ps <= 524'288; ps *= 2) {
+		//file.open("measures_boxplot_"+ std::to_string(ps) + ".csv", std::ios::out);
+	for (auto i(0); i < 3; i++) {
+		file.open("measures_total" + std::to_string(i) + ".csv", std::ios::out);
+		// prepare header
+		file << "v ps : > ts,";
+		// for (auto ts(16); ts <= 1'024; ts *= 2)
+		// file << ts << ",";
+		// file << std::endl;
+		file << "Initialize time,kernel one time,copying time,kernel two time" << std::endl;
+		//file << "step,";
+
+		/* prepare body, dimensions is due to the limitations on tile size and tile count of c++ AMP.
+		See https://bit.ly/2qgCeTB for details.*/
+
+		for (auto ps(1024); ps <= 524'288; ps *= 2) {
+			// initialize vector of problemsize, will contain endprices later.
+			std::vector<float>paths(ps);
+
+			//std::vector<float>paths(ps);
+			// write problem size to first column
+			file << ps << ",";
+			//file << paths.size() << std::endl;
+			//for (auto ts(16); ts <= 1'024; ts *= 2) {
+				//run(ts, paths);
+				//for (auto i(0); i < 100; i++)
+			run(16, paths);
 		}
 		file << std::endl;
+		//}
+		// close file stream
+		file.close();
 	}
-	// close file stream
-	file.close();
-	*/
+	//}
+
 	// test for concurrency visualizer
+	/*
 	query_amp_support();
 	warm_up();
 	int ps(524'288), ts(128);
 	std::vector<float>paths(ps);
 	run(ts, paths);
-
+	*/
 	return 0;
 } // main
