@@ -81,7 +81,7 @@ using the Cartesian form Box Muller transform. Box Muller is inferior in speed t
 algorithm but simpler to implement. That's why I've chosen Box Muller over Ziggurat algorithm.
 Snippet is adapted from a Microsoft sample. See https://goo.gl/cU6b1X for details.
 */
-void box_muller_transform(float& u1, float& u2) restrict(amp)
+inline void box_muller_transform(float& u1, float& u2) restrict(amp)
 {
 	// limit minimum uniform random to > 0, as log(0) = n. d.
 	u1 = fast_math::fmax(u1, 0.00000000000001f);
@@ -95,19 +95,19 @@ void box_muller_transform(float& u1, float& u2) restrict(amp)
 details on geometric brownian motion see: https://goo.gl/lrCeLJ.
 */
 void generate_random_paths(const float initial_value, const float expected_return,
-                           const float volatility, const int trading_days, const int holding_period,
-                           array<float>& endvalues)
+	const float volatility, const int trading_days, const int holding_period,
+	array<float>& endvalues)
 {
 	// validate that given input is optimal
 	assert(holding_period % 2 == 0 && holding_period >= 2);
-
+	assert(initial_value > 0);
+	assert(volatility > 0 && volatility <= 1);
+	assert(expected_return > 0 && expected_return < 1);
 	/* tinymt_collection is a wrapper around concurrency::array. Its maximum extent is at 65'536 due to the way how the rng
-	 * is implemented. The size of the tinymt_collection is at max 65'536. This impacts the calculation in a way, that more
-	 * paths do not yield in more accurate simulation results. But results are already pretty stable at 65'536.
+	 * is implemented. I am reusing the same random generator for all threads but seeding it differently with the thread id.
 	 */
-	const unsigned rank = endvalues.extent[0] > 65'536 ? 65'536 : endvalues.extent[0];
 	const extent<1> tinymt_extent(1);
-	const tinymt_collection<1> rand_collection(tinymt_extent);
+	const tinymt_collection<1> tinymt_collection(tinymt_extent);
 
 	// flag for concurrency visualizer
 	markers.write_flag(normal_importance, L"generate random");
@@ -120,7 +120,8 @@ void generate_random_paths(const float initial_value, const float expected_retur
 			float s(0.0f);
 			float prev_s(initial_value);
 			// modify index if number is greater than size of tinymt_collection.
-			tinymt t = rand_collection[index<1>(0)];
+			tinymt t = tinymt_collection[index<1>(0)];
+			// seed rng with index
 			t.initialize(idx[0]);
 			// implementation follows a Geometric brownian motion model. See https://bit.ly/2HLeqPS for rationalle behind it.
 			// scale drift to timestep
@@ -140,11 +141,11 @@ void generate_random_paths(const float initial_value, const float expected_retur
 
 				// Using loop unrolling for performance optimizatation, limit minimum price to 0
 				float ds = mean_drift + daily_volatility * z0;
-				s = fast_math::fmax(prev_s * fast_math::expf(ds), 0.0f);
+				s = fast_math::fmaxf(prev_s * fast_math::expf(ds), 0.0f);
 				prev_s = s;
 
 				ds = mean_drift + daily_volatility * z1;
-				s = fast_math::fmax(prev_s * fast_math::expf(ds), 0.0f);
+				s = fast_math::fmaxf(prev_s * fast_math::expf(ds), 0.0f);
 				prev_s = s;
 			}
 			endvalues[idx] = s;
@@ -211,7 +212,7 @@ float min_element(array<float, 1>& src)
 				{
 					if (local_idx < s)
 					{
-						tile_data[local_idx] = fast_math::fmin(tile_data[local_idx], tile_data[local_idx + s]);
+						tile_data[local_idx] = fast_math::fminf(tile_data[local_idx], tile_data[local_idx + s]);
 					}
 					tidx.barrier.wait();
 				}
@@ -246,8 +247,8 @@ float min_element(array<float, 1>& src)
 the endvalue at rank 0.*/
 template <const int TileSize>
 void calculate_value_at_risk(std::vector<float>& host_end_values, const float initial_value,
-                             const float expected_return,
-                             const float volatility, const int trading_days, const int holding_period)
+	const float expected_return,
+	const float volatility, const int trading_days, const int holding_period)
 {
 	// time taken to initialize, no copying of data, entire implementation uses array instead of array_view to be able to measure copying times as well (cmp. p. 131 AMP book) 
 	const auto start_initialize = the_amp_clock::now();
@@ -306,7 +307,8 @@ void warm_up()
 	// run kernel with minimal dataset
 	calculate_value_at_risk<4>(paths, 10.0f, 0.05f, 0.04f, 300, 10);
 	std::cout <<
-		"------------------------------------- valid results starting from here -------------------------------------" << std::endl;
+		"------------------------------------- valid results starting from here -------------------------------------" << std
+		::endl;
 } // warm_up
 
 /* This is wrapper function around calculate_value_at_risk. It lets the tile_size dynamically
@@ -314,8 +316,8 @@ by using template parameters. The tilesize must be known at compile time. An app
 to this is suggested in the AMP book.
 */
 void run(const unsigned& tile_size, std::vector<float>& paths, const float initial_value = 10.0f,
-         const float expected_return = 0.05f, const float volatility = 0.04f, const int trading_days = 300,
-         const int holding_period = 300)
+	const float expected_return = 0.05f, const float volatility = 0.04f, const int trading_days = 300,
+	const int holding_period = 300)
 {
 	switch (tile_size)
 	{
@@ -442,7 +444,8 @@ int main(int argc, char* argv[])
 	// test for concurrency visualizer
 	query_amp_support();
 	warm_up();
-	for (auto i(1'024); i <= 524'287; i *= 2) {
+	for (auto i(1'024); i <= 524'288; i *= 2)
+	{
 		const auto ps(i), ts(128);
 		std::vector<float> paths(ps);
 		run(ts, paths);
