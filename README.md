@@ -19,22 +19,33 @@ repeat n times
     generate normal distributed number
     update end price
   save end price to path array  
-sort path array in descending order
-extract the nth quantile
-scale VAR to holding period using square root of time
+extract the 0th quantile
 print results
 ```
 ## boundary
 - Assuming a stock without dividend payments
 - single stock portfolio
 - using C++ AMP
+- extents that don't require padding
 - optimized for a NVIDIA GeForce 940MX
+
+## usage
+Using the program is simple:
+```
+cd path
+REM access help for explanation on cl arguments
+C:\path>ConsoleApplication3 --help
+REM sample usage of calculation with a tile size of 16 and 512k paths
+C:\path>ConsoleApplication3 -x 16 -p 524288 -i 10 -r 0.05 -v 0.04 -d 300 -t 300
+```
+sample output:
+![sample output](./img/screenshot.jpg)
 
 ## Todos
 - [x] Prepare proposal
 - [x] Implement MC kernel
 - [x] Implement path array to value at risk functionality
-- [ ] Optimize memory access, loop unrolling etc.
+- [x] Optimize memory access, ~~loop unrolling~~ etc.
 - [x] measure performance
 - [x] Prepare presentation
 - [ ] Enhance to a multi stock portfolio (optional)
