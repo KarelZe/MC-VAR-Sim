@@ -1,7 +1,7 @@
 #define NOMINMAX
 
 #include <fstream>
-#include <cstdlib> 
+#include <cstdlib>
 #include <cassert>
 #include <chrono>
 #include <iostream>
@@ -11,7 +11,6 @@
 #include <amp.h>
 #include <amp_tinymt_rng.h>
 #include <amp_math.h>
-#include <amp_algorithms.h>
 #include <cvmarkersobj.h>
 #include <tclap/CmdLine.h>
 
@@ -25,7 +24,7 @@ typedef std::chrono::steady_clock the_serial_clock;
 typedef std::chrono::steady_clock the_amp_clock;
 
 
-std::ofstream file;
+// std::ofstream file;
 marker_series markers;
 
 void report_accelerator(const accelerator a)
@@ -41,7 +40,6 @@ void report_accelerator(const accelerator a)
 		<< std::endl << "       supports_double_precision         = " << bs[a.supports_double_precision]
 		<< std::endl << "       supports_limited_double_precision = " << bs[a.supports_limited_double_precision]
 		<< std::endl;
-
 }
 
 // List and select the accelerator to use. If default accelerator is reference implementation, a warning is thrown.
@@ -62,7 +60,7 @@ void list_accelerators()
 		std::wcout << "Running on very slow emulator! Only use this accelerator for debugging." << std::endl;
 } // list_accelerators
 
-// query if AMP accelerator exists on hardware
+// query if AMP accelerator exists on hardware and print all available accelerators
 void query_amp_support()
 {
 	std::vector<accelerator> accls = accelerator::get_all();
@@ -79,7 +77,7 @@ void query_amp_support()
 
 /*
 This function transforms uniformly distributed variables to normally distributed variables
-using the Cartesian form Box Muller transform. Box Muller is inferior in speed to Ziggurat
+using the Cartesian form of Box Muller transform. Box Muller is inferior in speed to Ziggurat
 algorithm but simpler to implement. That's why I've chosen Box Muller over Ziggurat algorithm.
 Snippet is adapted from a Microsoft sample. See https://goo.gl/cU6b1X for details.
 */
@@ -103,10 +101,11 @@ void generate_random_paths(const float initial_value, const float expected_retur
 	// validate that given input is optimal
 	assert(holding_period % 2 == 0 && holding_period >= 2);
 	assert(initial_value > 0);
+	assert(trading_days > 0);
 	assert(volatility > 0 && volatility <= 1);
 	assert(expected_return > 0 && expected_return < 1);
 	/* tinymt_collection is a wrapper around concurrency::array. Its maximum extent is at 65'536 due to the way how the rng
-	 * is implemented. I am reusing the same random generator for all threads but seeding it differently with the thread id.
+	 * is implemented. I am copying the same random generator for all threads but seeding it differently with the thread id.
 	 */
 	const extent<1> tinymt_extent(1);
 	const tinymt_collection<1> tinymt_collection(tinymt_extent);
@@ -129,16 +128,16 @@ void generate_random_paths(const float initial_value, const float expected_retur
 			// scale drift to timestep
 			const float daily_drift = expected_return / trading_days;
 			// scale volatility to timestep. Volatility scales with square root of time.
-			// Use rsqrt for performance reasons (See Chapter 7 AMP-Book)
+			// Use rsqrtf for performance reasons (See p. 163 AMP-Book)
 			const float daily_volatility = volatility * fast_math::rsqrtf(static_cast<float>(trading_days));
 			// extract volatility from daily drift
 			const float mean_drift = daily_drift - 0.5f * daily_volatility * daily_volatility;
-			// generate path for entire holding period, write endprices back to vector
+			// generate path for entire holding period, write endprices back to array
 			for (auto day(1); day <= holding_period / 2; day++)
 			{
 				// generate two random numbers between 0-1 and convert to normally distributed numbers
-				auto z0 = t.next_single();
-				auto z1 = t.next_single();
+				float z0 = t.next_single();
+				float z1 = t.next_single();
 				box_muller_transform(z0, z1);
 
 				// Using loop unrolling for performance optimizatation, limit minimum price to 0
@@ -160,14 +159,17 @@ void generate_random_paths(const float initial_value, const float expected_retur
 } // generate_random_paths
 
 
-  /* This function returns the smallest element of an array_view calculated using an
-  map reduce approach. The major part is calculated on the gpu. In case of an error 0 is returned.
-  Tile size needs to be known at compile time. That's why I am using template arguments
-  here.
-  */
+/* This function returns the smallest element of an array_view calculated using an
+map reduce approach. The major part is calculated on the gpu. In case of an error 0 is returned.
+Tile size needs to be known at compile time. That's why I am using template arguments
+here. The implementation is inspired by implementation discussed in class (See Falconer, p. 25),
+but already performs the first reduction while saving to tile_static leading to an performance
+improvement of ca. 50 %. Implementation inspired by Reduction case study in AMP book.
+*/
 template <const int TileSize>
 float min_element(array<float, 1>& src)
 {
+	// get total element_count
 	int element_count = src.extent[0];
 	// Using arrays as temporary memory. Array holds at least one element
 	array<float, 1> dst(element_count / TileSize ? element_count / TileSize : 1);
@@ -188,7 +190,7 @@ float min_element(array<float, 1>& src)
 		// Reduce using parallel_for_each as long as element >= tile_size
 		while (element_count >= TileSize && element_count % (TileSize * 2) == 0)
 		{
-			// halven extent
+			// halven extent, as the first reduction happens during saving to tile_static memory
 			extent<1> halved_extent(element_count / 2);
 
 			parallel_for_each(halved_extent.tile<TileSize>(),
@@ -198,9 +200,9 @@ float min_element(array<float, 1>& src)
 				tile_static float tile_data[TileSize];
 
 				unsigned local_idx = tidx.local[0];
-				unsigned rel_idx = tidx.tile[0] * (TileSize * 2) + local_idx;
+				unsigned relative_idx = tidx.tile[0] * (TileSize * 2) + local_idx;
 				// perform first reduction when populating tile_static memory
-				tile_data[local_idx] = fast_math::fminf(src[rel_idx], src[rel_idx + TileSize]);
+				tile_data[local_idx] = fast_math::fminf(src[relative_idx], src[relative_idx + TileSize]);
 				tidx.barrier.wait();
 
 				for (unsigned s = TileSize / 2; s > 0; s /= 2)
@@ -224,12 +226,11 @@ float min_element(array<float, 1>& src)
 		// Perform any remaining reduction on the CPU.
 		std::vector<float> result(element_count);
 
-		// copy only part of array_view back to host, which contains the minimal elements (for performance reasons)
+		// copy only part of array back to host, which contains the minimal elements (for performance reasons)
 		copy(src.section(0, element_count), result.begin());
 
-		// reduce all remaining tiles on the cpu
+		// reduce all remaining tiles on the cpu and find the minimum element
 		const auto idx = std::min_element(result.begin(), result.end());
-
 		return result.at(idx - result.begin());
 	}
 	catch (const runtime_exception& ex)
@@ -244,7 +245,8 @@ the endvalue at rank 0.*/
 template <const int TileSize>
 void calculate_value_at_risk(std::vector<float>& host_end_values, const float initial_value,
 	const float expected_return,
-	const float volatility, const int trading_days, const int holding_period, const bool print_enabled = true)
+	const float volatility, const int trading_days, const int holding_period,
+	const bool print_enabled = true)
 {
 	// time taken to initialize, no copying of data, entire implementation uses array instead of array_view to be able to measure copying times as well (cmp. p. 131 AMP book) 
 	const auto start_initialize = the_amp_clock::now();
@@ -275,35 +277,49 @@ void calculate_value_at_risk(std::vector<float>& host_end_values, const float in
 	// total elapsed time. It can slightly differ from the individual times due to casting
 	const auto elapsed_time_total = duration_cast<microseconds>(end_kernel_two - start_initialize).count();
 
-	if (print_enabled) {
-		file << elapsed_time_initialize << "," << elapsed_time_kernel_one << "," << elapsed_time_copying << "," << elapsed_time_kernel_two << "," << elapsed_time_total << std::endl;
+	if (print_enabled)
+	{
+		/*
+		// write measures to csv.
+		file << elapsed_time_initialize << "," << elapsed_time_kernel_one << "," << elapsed_time_copying << "," <<
+		elapsed_time_kernel_two << "," << elapsed_time_total << std::endl;
+		*/
 
 		std::cout << std::setfill('.');
 		// stats 
 		std::cout << "stats:" << std::endl;
-		std::cout << std::setw(35) << std::left << "Initialize time (micro s):" << std::right << std::setw(8) << elapsed_time_initialize << std::endl;
-		std::cout << std::setw(35) << std::left << "Kernel one time (micro s):" << std::right << std::setw(8) << elapsed_time_kernel_one << std::endl;
-		std::cout << std::setw(35) << std::left << "copying time (micro s):" << std::right << std::setw(8) << elapsed_time_copying << std::endl;
-		std::cout << std::setw(35) << std::left << "Kernel two time (micro s):" << std::right << std::setw(8) << elapsed_time_kernel_two << std::endl;
-		std::cout << std::setw(35) << std::left << "Total time (micro s):" << std::right << std::setw(8) << elapsed_time_total << std::endl << std::endl;
+		std::cout << std::setw(35) << std::left << "Initialize time (micro s):" << std::right << std::setw(8) <<
+			elapsed_time_initialize << std::endl;
+		std::cout << std::setw(35) << std::left << "Kernel one time (micro s):" << std::right << std::setw(8) <<
+			elapsed_time_kernel_one << std::endl;
+		std::cout << std::setw(35) << std::left << "copying time (micro s):" << std::right << std::setw(8) <<
+			elapsed_time_copying << std::endl;
+		std::cout << std::setw(35) << std::left << "Kernel two time (micro s):" << std::right << std::setw(8) <<
+			elapsed_time_kernel_two << std::endl;
+		std::cout << std::setw(35) << std::left << "Total time (micro s):" << std::right << std::setw(8) << elapsed_time_total
+			<< std::endl << std::endl;
 
 
 		// measures
 		std::cout << "measures:" << std::endl;
-		std::cout << std::setw(35) << std::left << "number of paths:" << std::right << std::setw(8) << host_end_values.size() << std::endl;
+		std::cout << std::setw(35) << std::left << "number of paths:" << std::right << std::setw(8) << host_end_values.size()
+			<< std::endl;
 		std::cout << std::setw(35) << std::left << "tile size:" << std::right << std::setw(8) << TileSize << std::endl;
 		std::cout << std::setw(35) << std::left << "confidence level:" << std::right << std::setw(8) << "100 %" << std::endl;
-		std::cout << std::setw(35) << std::left << "initial value:" << std::right << std::setw(8) << initial_value << std::endl;
-		std::cout << std::setw(35) << std::left << "expected return:" << std::right << std::setw(8) << expected_return << std::endl;
+		std::cout << std::setw(35) << std::left << "initial value:" << std::right << std::setw(8) << initial_value << std::
+			endl;
+		std::cout << std::setw(35) << std::left << "expected return:" << std::right << std::setw(8) << expected_return << std
+			::endl;
 		std::cout << std::setw(35) << std::left << "volatility:" << std::right << std::setw(8) << volatility << std::endl;
 		std::cout << std::setw(35) << std::left << "trading days:" << std::right << std::setw(8) << trading_days << std::endl;
-		std::cout << std::setw(35) << std::left << "holding period:" << std::right << std::setw(8) << holding_period << std::endl;
+		std::cout << std::setw(35) << std::left << "holding period:" << std::right << std::setw(8) << holding_period << std::
+			endl;
 		const HANDLE h_console = GetStdHandle(STD_OUTPUT_HANDLE);
 		SetConsoleTextAttribute(h_console, 12);
-		std::cout << std::setw(35) << std::left << "value at risk:" << std::right << std::setw(8) << min_result - initial_value << std::endl << std::endl;
+		std::cout << std::setw(35) << std::left << "value at risk:" << std::right << std::setw(8) << min_result -
+			initial_value << std::endl << std::endl;
 		SetConsoleTextAttribute(h_console, 7);
 	}
-
 } // calculate_value_at_risk
 
 /*
@@ -316,9 +332,9 @@ void warm_up()
 	calculate_value_at_risk<32>(paths, 10.0f, 0.05f, 0.04f, 300, 10, false);
 } // warm_up
 
-/* This is wrapper function around calculate_value_at_risk. It lets the tile_size dynamically
+/* This is wrapper function around calculate_value_at_risk. It  changing the tile_size dynamically
 by using template parameters. The tilesize must be known at compile time. An approach similar
-to this is suggested in the AMP book.
+to this is suggested in the AMP book (see p. 96-97).
 */
 void run(const unsigned& tile_size, std::vector<float>& paths, const float initial_value = 10.0f,
 	const float expected_return = 0.05f, const float volatility = 0.04f, const int trading_days = 300,
@@ -363,7 +379,6 @@ void run(const unsigned& tile_size, std::vector<float>& paths, const float initi
 
 int main(int argc, char* argv[])
 {
-
 	try
 	{
 		TCLAP::CmdLine cmd("AMPMC", ' ', "1");
