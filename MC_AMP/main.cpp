@@ -1,5 +1,4 @@
 #define NOMINMAX
-
 #include <fstream>
 #include <cstdlib>
 #include <cassert>
@@ -13,6 +12,11 @@
 #include <amp_math.h>
 #include <cvmarkersobj.h>
 #include <tclap/CmdLine.h>
+#include <PercentageConstraint.h>
+#include <IntegerConstraint.h>
+#include <EvenIntegerConstraint.h>
+#include <PathConstraint.h>
+#include <TileConstraint.h>
 
 using namespace concurrency;
 using namespace diagnostic;
@@ -177,11 +181,11 @@ float min_element(array<float, 1>& src)
 	// check for max tile size
 	assert(TileSize >= 2 && TileSize <= 1'024);
 	// tile_size and tile_count are not matching element_count
-	assert(element_count % TS == 0);
+	assert((element_count % TileSize) == 0);
 	// element_count is not valid.
 	assert(element_count > 0 && element_count <= INT_MAX);
 	// check if number of tiles is <= 65k, which is the max in AMP
-	assert(element_count / TileSize < 65'536);
+	assert((element_count / TileSize) < 65'536);
 
 	markers.write_flag(normal_importance, L"reduce");
 
@@ -383,15 +387,22 @@ int main(int argc, char* argv[])
 	{
 		TCLAP::CmdLine cmd("AMPMC", ' ', "1");
 
+		// Define constraints
+		PostiveValueConstraint positiveValueConstraint;
+		PercentageConstraint percentageConstraint;
+		DaysConstraint daysConstraint;
+		PathConstraint pathConstraint;
+		TileConstraint tileConstraint;
+
 		// Define the arguments
-		TCLAP::ValueArg<float> initial_value("i", "initial_value", "Initial value of the investment.", false, 10.0f, "float");
-		TCLAP::ValueArg<float> annual_return("r", "annual_return", "Annual return of the investment", false, 0.05f, "float");
-		TCLAP::ValueArg<float> annual_volatility("v", "annual_volatility", "Annual volalitility of the investment", false,
-			0.05f, "float");
-		TCLAP::ValueArg<int> trading_days("t", "trading_days", "Annual trading days", false, 300, "int");
-		TCLAP::ValueArg<int> holding_period("d", "duration", "Duration of the investment", false, 300, "int");
-		TCLAP::ValueArg<int> paths("p", "paths", "Number of paths", false, 1'024, "int");
-		TCLAP::ValueArg<int> tile_size("x", "tile_size", "Size of tiles", false, 16, "int");
+		TCLAP::ValueArg<float> initial_value("i", "initial_value", "Initial value of the investment.", false,0.04f,&positiveValueConstraint);
+		TCLAP::ValueArg<float> annual_return("r", "annual_return", "Annual return of the investment", false, 0.05f, &percentageConstraint);
+		TCLAP::ValueArg<float> annual_volatility("v", "annual_volatility", "Annual volalitility of the investment",false,0.04f, &percentageConstraint);
+		TCLAP::ValueArg<int> trading_days("t", "trading_days", "Annual trading days", false, 300, &daysConstraint);
+		TCLAP::ValueArg<int> holding_period("d", "duration", "Duration of the investment", false, 300, &daysConstraint);
+		TCLAP::ValueArg<int> paths("p", "paths", "Number of paths", false, 1'024, &pathConstraint);
+		TCLAP::ValueArg<int> tile_size("x", "tile_size", "Size of tiles", false, 16, &tileConstraint);
+		
 		cmd.add(initial_value);
 		cmd.add(annual_return);
 		cmd.add(annual_volatility);
@@ -401,6 +412,7 @@ int main(int argc, char* argv[])
 		cmd.add(tile_size);
 		// Parse arguments
 		cmd.parse(argc, argv);
+
 
 		// Check AMP support
 		query_amp_support();
