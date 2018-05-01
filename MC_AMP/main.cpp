@@ -8,10 +8,12 @@
 #include <fstream>
 #include <string>
 #include <amp.h>
+// see readme file for dependencies
 #include <amp_tinymt_rng.h>
 #include <amp_math.h>
 #include <cvmarkersobj.h>
 #include <tclap/CmdLine.h>
+// see current folder
 #include <PercentageConstraint.h>
 #include <IntegerConstraint.h>
 #include <EvenIntegerConstraint.h>
