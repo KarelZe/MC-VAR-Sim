@@ -29,6 +29,11 @@ print results
 - extents that don't require padding
 - optimized for a NVIDIA GeForce 940MX
 
+## dependencies
+- Commandline parsing is handled through [TCLAP](http://tclap.sourceforge.net/)
+- Concurrency Visualizer Marker through [Visual Studio Extension](https://marketplace.visualstudio.com/items?itemName=Diagnostics.ConcurrencyVisualizer2017)
+- Random number generation through [amprng](https://archive.codeplex.com/?p=amprng)
+
 ## usage
 Using the program is simple:
 ```
