@@ -28,7 +28,7 @@ typedef std::chrono::steady_clock the_serial_clock;
 typedef std::chrono::steady_clock the_amp_clock;
 
 
-std::ofstream file;
+// std::ofstream file;
 marker_series markers;
 
 void report_accelerator(const accelerator a)
@@ -395,7 +395,7 @@ int main(int argc, char* argv[])
 		TileConstraint tileConstraint;
 
 		// Define the arguments
-		TCLAP::ValueArg<float> initial_value("i", "initial_value", "Initial value of the investment.", false, 0.04f, &positiveValueConstraint);
+		TCLAP::ValueArg<float> initial_value("i", "initial_value", "Initial value of the investment.", false, 10, &positiveValueConstraint);
 		TCLAP::ValueArg<float> annual_return("r", "annual_return", "Annual return of the investment", false, 0.05f, &percentageConstraint);
 		TCLAP::ValueArg<float> annual_volatility("v", "annual_volatility", "Annual volalitility of the investment", false, 0.04f, &percentageConstraint);
 		TCLAP::ValueArg<int> trading_days("t", "trading_days", "Annual trading days", false, 300, &daysConstraint);
