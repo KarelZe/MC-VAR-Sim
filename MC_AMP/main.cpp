@@ -28,7 +28,7 @@ typedef std::chrono::steady_clock the_serial_clock;
 typedef std::chrono::steady_clock the_amp_clock;
 
 
-// std::ofstream file;
+std::ofstream file;
 marker_series markers;
 
 void report_accelerator(const accelerator a)
@@ -286,7 +286,7 @@ void calculate_value_at_risk(std::vector<float>& host_end_values, const float in
 		/*
 		// write measures to csv.
 		file << elapsed_time_initialize << "," << elapsed_time_kernel_one << "," << elapsed_time_copying << "," <<
-		elapsed_time_kernel_two << "," << elapsed_time_total << std::endl;
+			elapsed_time_kernel_two << "," << elapsed_time_total << std::endl;
 		*/
 
 		std::cout << std::setfill('.');
@@ -395,14 +395,14 @@ int main(int argc, char* argv[])
 		TileConstraint tileConstraint;
 
 		// Define the arguments
-		TCLAP::ValueArg<float> initial_value("i", "initial_value", "Initial value of the investment.", false,0.04f,&positiveValueConstraint);
+		TCLAP::ValueArg<float> initial_value("i", "initial_value", "Initial value of the investment.", false, 0.04f, &positiveValueConstraint);
 		TCLAP::ValueArg<float> annual_return("r", "annual_return", "Annual return of the investment", false, 0.05f, &percentageConstraint);
-		TCLAP::ValueArg<float> annual_volatility("v", "annual_volatility", "Annual volalitility of the investment",false,0.04f, &percentageConstraint);
+		TCLAP::ValueArg<float> annual_volatility("v", "annual_volatility", "Annual volalitility of the investment", false, 0.04f, &percentageConstraint);
 		TCLAP::ValueArg<int> trading_days("t", "trading_days", "Annual trading days", false, 300, &daysConstraint);
 		TCLAP::ValueArg<int> holding_period("d", "duration", "Duration of the investment", false, 300, &daysConstraint);
 		TCLAP::ValueArg<int> paths("p", "paths", "Number of paths", false, 1'024, &pathConstraint);
 		TCLAP::ValueArg<int> tile_size("x", "tile_size", "Size of tiles", false, 16, &tileConstraint);
-		
+
 		cmd.add(initial_value);
 		cmd.add(annual_return);
 		cmd.add(annual_volatility);
@@ -410,9 +410,9 @@ int main(int argc, char* argv[])
 		cmd.add(holding_period);
 		cmd.add(paths);
 		cmd.add(tile_size);
+
 		// Parse arguments
 		cmd.parse(argc, argv);
-
 
 		// Check AMP support
 		query_amp_support();
@@ -424,6 +424,7 @@ int main(int argc, char* argv[])
 		std::vector<float> path_vector(paths.getValue());
 		run(tile_size.getValue(), path_vector, initial_value.getValue(), annual_return.getValue(),
 			annual_volatility.getValue(), trading_days.getValue(), holding_period.getValue());
+
 		/*
 		// validate output by printing it to csv
 		file.open("validation.csv", std::ios::out);
@@ -439,20 +440,18 @@ int main(int argc, char* argv[])
 
 
 	/*
+	// run simulation 100 times with all combinations, similar to what is recommended in amp book (p 173-174).
 	query_amp_support();
 	warm_up();
-
-	// run simulation 100 times with all combinations
 
 	file.open("measures.csv", std::ios::out);
 	file << "ps,ts,i,Initialize time, kernel one time, copying time, kernel two time, total time" << std::endl;
 	for (auto i(1); i <= 100; i++) {
 		for (auto ps(1024); ps <= 524'288; ps *= 2) {
 			for (auto ts(16); ts <= 1024; ts *= 2) {
-					warm_up();
-					file << ps << "," << ts << "," << i << ",";
-					std::vector<float> paths(ps);
-					run(ts, paths);
+				file << ps << "," << ts << "," << i << ",";
+				std::vector<float> paths(ps);
+				run(ts, paths);
 			}
 		}
 	}
